@@ -1,0 +1,32 @@
+# Jenkins workspace files
+*.txt
+batch_*.txt
+all_hosts.txt
+batch_info.txt
+
+# SSH keys (never commit)
+*.pem
+*.key
+id_rsa*
+
+# Jenkins build artifacts
+.jenkins/
+workspace/
+
+# AppDynamics files
+*.zip
+config.ini
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Logs
+*.log

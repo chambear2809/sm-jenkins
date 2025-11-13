@@ -1,0 +1,92 @@
+// Pipeline: Install Node Agent
+// Description: Installs Node Agent using smartagentctl across multiple EC2 hosts
+
+pipeline {
+    agent { label 'linux' }
+    
+    parameters {
+        string(name: 'BATCH_SIZE', defaultValue: '256', description: 'Number of hosts to process per batch')
+        string(name: 'SSH_USER', defaultValue: 'ubuntu', description: 'SSH username for target hosts')
+    }
+    
+    environment {
+        FAIL_FILE = "/tmp/failed_hosts_${BUILD_ID}"
+        KEY_FILE = "${HOME}/.ssh/id_rsa_build_${BUILD_ID}"
+        AGENT_TYPE = "node"
+        OPERATION = "install"
+    }
+    
+    stages {
+        stage('Prepare') { steps { script { prepareBatches() } } }
+        stage('Process Batches') { steps { script { processBatches() } } }
+        stage('Summary') { steps { script { printSummary("Node Agent Installation") } } }
+    }
+    
+    post { always { script { cleanup() } } }
+}
+
+def prepareBatches() {
+    echo "📊 Preparing ${env.AGENT_TYPE} agent ${env.OPERATION}..."
+    withCredentials([string(credentialsId: 'deployment-hosts', variable: 'DEPLOYMENT_HOSTS')]) {
+        sh '''
+            set -euo pipefail
+            HOSTS=$(printf '%s\\n' "$DEPLOYMENT_HOSTS" | tr -d '\\r' | grep -v '^\\s*$' || true)
+            TOTAL=$(printf '%s\\n' "$HOSTS" | wc -l | xargs || echo 0)
+            echo "total_hosts=$TOTAL" > ${WORKSPACE}/batch_info.txt
+            [ "${TOTAL:-0}" -eq 0 ] && echo "total_batches=0" >> ${WORKSPACE}/batch_info.txt && echo "ℹ️ No hosts provided." && exit 1
+            TOTAL_BATCHES=$(( (TOTAL + BATCH_SIZE - 1) / BATCH_SIZE ))
+            echo "total_batches=$TOTAL_BATCHES" >> ${WORKSPACE}/batch_info.txt
+            printf '%s\\n' "$HOSTS" > ${WORKSPACE}/all_hosts.txt
+            echo "📊 Processing $TOTAL hosts across $TOTAL_BATCHES batches"
+        '''
+    }
+    def batchInfo = readFile("${WORKSPACE}/batch_info.txt")
+    env.TOTAL_HOSTS = batchInfo.find(/total_hosts=(\d+)/) { match, num -> num }
+    env.TOTAL_BATCHES = batchInfo.find(/total_batches=(\d+)/) { match, num -> num }
+    if (env.TOTAL_BATCHES == '0') { error("No hosts to process") }
+}
+
+def processBatches() {
+    def totalBatches = env.TOTAL_BATCHES as Integer
+    def batchSize = params.BATCH_SIZE as Integer
+    for (int i = 0; i < totalBatches; i++) {
+        def batchNum = i + 1
+        stage("${env.OPERATION.capitalize()} Batch ${batchNum}/${totalBatches}") {
+            sh "head -n \$(( ${batchNum} * ${batchSize} )) ${WORKSPACE}/all_hosts.txt | tail -n ${batchSize} > ${WORKSPACE}/batch_${batchNum}.txt"
+            processAgentBatch(batchNum)
+        }
+    }
+}
+
+def processAgentBatch(batchNum) {
+    withCredentials([sshUserPrivateKey(credentialsId: 'ssh-private-key', keyFileVariable: 'SSH_KEY_FILE')]) {
+        sh """
+            set -euo pipefail
+            mkdir -p \$(dirname ${env.KEY_FILE}) && cp \$SSH_KEY_FILE ${env.KEY_FILE} && chmod 600 ${env.KEY_FILE}
+            while IFS= read -r HOST; do
+                (
+                    if ssh -i ${env.KEY_FILE} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 \
+                          "${params.SSH_USER}@\${HOST}" "cd /opt/appdynamics/appdsmartagent && sudo ./smartagentctl ${env.OPERATION} ${env.AGENT_TYPE}"; then
+                        echo "✅ \$HOST"
+                    else
+                        echo "❌ \$HOST" >&2 && echo "\$HOST" >> ${env.FAIL_FILE}
+                    fi
+                ) &
+            done < ${WORKSPACE}/batch_${batchNum}.txt
+            wait
+        """
+    }
+}
+
+def printSummary(title) {
+    echo "📊 ${title} Summary"
+    if (fileExists(env.FAIL_FILE)) {
+        echo "❌ Failed hosts:"; echo readFile(env.FAIL_FILE); currentBuild.result = 'FAILURE'
+    } else {
+        echo "✅ All operations completed successfully"
+    }
+}
+
+def cleanup() {
+    sh "rm -f ${env.KEY_FILE} ${WORKSPACE}/all_hosts.txt ${WORKSPACE}/batch_*.txt ${WORKSPACE}/batch_info.txt ${env.FAIL_FILE}"
+}

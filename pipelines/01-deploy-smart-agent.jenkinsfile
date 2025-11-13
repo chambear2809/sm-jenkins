@@ -1,0 +1,236 @@
+// Pipeline: Deploy Smart Agent
+// Description: Installs AppDynamics Smart Agent and starts the service across multiple EC2 hosts
+
+pipeline {
+    agent {
+        label 'linux' // Adjust to your Jenkins agent label
+    }
+    
+    parameters {
+        string(
+            name: 'BATCH_SIZE',
+            defaultValue: '256',
+            description: 'Number of hosts to process per batch'
+        )
+        string(
+            name: 'SSH_USER',
+            defaultValue: 'ubuntu',
+            description: 'SSH username for target hosts'
+        )
+        string(
+            name: 'SMARTAGENT_USER',
+            defaultValue: '',
+            description: 'User for Smart Agent service (optional)'
+        )
+        string(
+            name: 'SMARTAGENT_GROUP',
+            defaultValue: '',
+            description: 'Group for Smart Agent service (optional)'
+        )
+    }
+    
+    environment {
+        FAIL_FILE = "/tmp/failed_hosts_${BUILD_ID}"
+        KEY_FILE = "${HOME}/.ssh/id_rsa_build_${BUILD_ID}"
+    }
+    
+    stages {
+        stage('Prepare') {
+            steps {
+                script {
+                    echo "📊 Preparing deployment..."
+                    
+                    // Ensure jq is installed
+                    sh '''
+                        if ! command -v jq >/dev/null 2>&1; then
+                            echo "Installing jq..."
+                            sudo apt-get update -qq && sudo apt-get install -y jq
+                        fi
+                    '''
+                    
+                    // Load deployment hosts from Jenkins credentials
+                    withCredentials([string(credentialsId: 'deployment-hosts', variable: 'DEPLOYMENT_HOSTS')]) {
+                        sh '''
+                            set -euo pipefail
+                            
+                            # Parse hosts and remove empty lines
+                            HOSTS=$(printf '%s\\n' "$DEPLOYMENT_HOSTS" | tr -d '\\r' | grep -v '^\\s*$' || true)
+                            
+                            # Count total hosts
+                            TOTAL=$(printf '%s\\n' "$HOSTS" | wc -l | xargs || echo 0)
+                            echo "total_hosts=$TOTAL" > ${WORKSPACE}/batch_info.txt
+                            
+                            if [ "${TOTAL:-0}" -eq 0 ]; then
+                                echo "total_batches=0" >> ${WORKSPACE}/batch_info.txt
+                                echo "ℹ️ No hosts provided."
+                                exit 1
+                            fi
+                            
+                            # Calculate number of batches
+                            BATCH_SIZE=${BATCH_SIZE}
+                            TOTAL_BATCHES=$(( (TOTAL + BATCH_SIZE - 1) / BATCH_SIZE ))
+                            echo "total_batches=$TOTAL_BATCHES" >> ${WORKSPACE}/batch_info.txt
+                            
+                            # Save all hosts to file for batching
+                            printf '%s\\n' "$HOSTS" > ${WORKSPACE}/all_hosts.txt
+                            
+                            echo "📊 Deploying Smart Agent to $TOTAL hosts across $TOTAL_BATCHES batches"
+                        '''
+                    }
+                    
+                    // Read batch info
+                    def batchInfo = readFile("${WORKSPACE}/batch_info.txt")
+                    env.TOTAL_HOSTS = batchInfo.find(/total_hosts=(\d+)/) { match, num -> num }
+                    env.TOTAL_BATCHES = batchInfo.find(/total_batches=(\d+)/) { match, num -> num }
+                    
+                    if (env.TOTAL_BATCHES == '0') {
+                        error("No hosts to deploy to")
+                    }
+                }
+            }
+        }
+        
+        stage('Deploy Batches') {
+            steps {
+                script {
+                    def totalBatches = env.TOTAL_BATCHES as Integer
+                    def batchSize = params.BATCH_SIZE as Integer
+                    
+                    for (int i = 0; i < totalBatches; i++) {
+                        def batchNum = i + 1
+                        
+                        stage("Deploy Batch ${batchNum}/${totalBatches}") {
+                            echo "🚀 Processing batch ${batchNum} of ${totalBatches}"
+                            
+                            // Extract batch hosts
+                            sh """
+                                head -n \$(( ${batchNum} * ${batchSize} )) ${WORKSPACE}/all_hosts.txt | \
+                                tail -n ${batchSize} > ${WORKSPACE}/batch_${batchNum}.txt
+                            """
+                            
+                            // Deploy to batch
+                            deployToBatch(batchNum)
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Summary') {
+            steps {
+                script {
+                    echo "📊 Deployment Summary"
+                    echo "===================="
+                    echo "Total hosts: ${env.TOTAL_HOSTS}"
+                    echo "Total batches: ${env.TOTAL_BATCHES}"
+                    echo "Batch size: ${params.BATCH_SIZE}"
+                    
+                    if (fileExists(env.FAIL_FILE)) {
+                        def failedHosts = readFile(env.FAIL_FILE)
+                        echo "❌ Failed hosts:"
+                        echo failedHosts
+                        currentBuild.result = 'FAILURE'
+                    } else {
+                        echo "✅ All deployments completed successfully"
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                // Cleanup
+                sh """
+                    rm -f ${env.KEY_FILE}
+                    rm -f ${WORKSPACE}/all_hosts.txt
+                    rm -f ${WORKSPACE}/batch_*.txt
+                    rm -f ${WORKSPACE}/batch_info.txt
+                    rm -f ${env.FAIL_FILE}
+                """
+            }
+        }
+    }
+}
+
+def deployToBatch(batchNum) {
+    withCredentials([
+        sshUserPrivateKey(credentialsId: 'ssh-private-key', keyFileVariable: 'SSH_KEY_FILE'),
+        string(credentialsId: 'account-access-key', variable: 'ACCOUNT_ACCESS_KEY')
+    ]) {
+        sh """
+            set -euo pipefail
+            
+            # Setup SSH key
+            mkdir -p \$(dirname ${env.KEY_FILE})
+            cp \$SSH_KEY_FILE ${env.KEY_FILE}
+            chmod 600 ${env.KEY_FILE}
+            
+            # Get batch hosts
+            BATCH_HOSTS=\$(cat ${WORKSPACE}/batch_${batchNum}.txt)
+            BATCH_SIZE=\$(echo "\$BATCH_HOSTS" | wc -l | xargs)
+            echo "🚀 Deploying to batch of \$BATCH_SIZE hosts"
+            
+            # Checkout repository files
+            cd ${WORKSPACE}
+            
+            # Substitute access key in config
+            sed 's/{{ACCOUNT_ACCESS_KEY}}/${ACCOUNT_ACCESS_KEY}/g' ../github-action-lab/config.ini > ${WORKSPACE}/config.ini
+            
+            # Remote script
+            read -r -d '' REMOTE_SCRIPT << 'EOF' || true
+set -e
+sudo apt-get update -qq && sudo apt-get install -y unzip
+sudo rm -rf /opt/appdynamics/appdsmartagent
+sudo mkdir -p /opt/appdynamics/appdsmartagent
+
+sudo unzip -o /tmp/appdsmartagent_64_linux_25.10.0.497.zip -d /opt/appdynamics/appdsmartagent
+sudo cp /tmp/config.ini /opt/appdynamics/appdsmartagent/config.ini
+
+cd /opt/appdynamics/appdsmartagent
+if [ -n "\${SMARTAGENT_USER:-}" ] && [ -n "\${SMARTAGENT_GROUP:-}" ]; then
+  echo "Starting agent with user/group: \$SMARTAGENT_USER/\$SMARTAGENT_GROUP"
+  sudo ./smartagentctl start --enable-auto-attach --service --user "\$SMARTAGENT_USER" --group "\$SMARTAGENT_GROUP"
+else
+  echo "Starting agent with default user/group"
+  sudo ./smartagentctl start --enable-auto-attach --service
+fi
+echo "Remote script completed successfully."
+EOF
+            
+            # Deploy to each host in parallel
+            while IFS= read -r HOST; do
+                (
+                    echo "📡 Starting deployment to \$HOST"
+                    
+                    # Copy artifacts
+                    if ! scp -i ${env.KEY_FILE} \
+                          -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 \
+                          ../github-action-lab/appdsmartagent_64_linux_25.10.0.497.zip ${WORKSPACE}/config.ini \
+                          "${params.SSH_USER}@\${HOST}:/tmp/"; then
+                        echo "❌ Failed to copy files to \$HOST" >&2
+                        echo "\$HOST" >> ${env.FAIL_FILE}
+                        exit 1
+                    fi
+                    
+                    # Run remote script
+                    if echo "\$REMOTE_SCRIPT" | ssh -i ${env.KEY_FILE} \
+                          -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30 \
+                          "${params.SSH_USER}@\${HOST}" \
+                          "SMARTAGENT_USER='${params.SMARTAGENT_USER}' SMARTAGENT_GROUP='${params.SMARTAGENT_GROUP}' bash -s"; then
+                        echo "✅ Completed deployment to \$HOST"
+                    else
+                        echo "❌ Failed to deploy to \$HOST" >&2
+                        echo "\$HOST" >> ${env.FAIL_FILE}
+                    fi
+                ) &
+            done < ${WORKSPACE}/batch_${batchNum}.txt
+            
+            # Wait for all parallel jobs
+            wait
+            
+            echo "✅ Batch ${batchNum} deployment complete"
+        """
+    }
+}
