@@ -1,0 +1,219 @@
+pipeline {
+    agent any
+    
+    parameters {
+        string(name: 'SMARTAGENT_ZIP_PATH', defaultValue: '/var/jenkins_home/smartagent/appdsmartagent.zip', description: 'Path to Smart Agent ZIP file on Jenkins server')
+        string(name: 'REMOTE_INSTALL_DIR', defaultValue: '/opt/appdynamics/smartagent', description: 'Remote directory for Smart Agent installation')
+        string(name: 'APPD_USER', defaultValue: 'ubuntu', description: 'User to run Smart Agent process')
+        string(name: 'APPD_GROUP', defaultValue: 'ubuntu', description: 'Group to run Smart Agent process')
+        string(name: 'SSH_PORT', defaultValue: '22', description: 'SSH port for remote hosts')
+        string(name: 'AGENT_NAME', defaultValue: 'smartagent', description: 'Smart Agent name')
+        string(name: 'LOG_LEVEL', defaultValue: 'DEBUG', description: 'Log level (DEBUG, INFO, WARN, ERROR)')
+    }
+    
+    environment {
+        STAGING_DIR = "${WORKSPACE}/smartagent-deploy"
+        EXTRACT_DIR = "${STAGING_DIR}/appdsmartagent"
+    }
+    
+    stages {
+        stage('Preparation') {
+            steps {
+                script {
+                    withCredentials([string(credentialsId: 'deployment-hosts', variable: 'HOSTS_LIST')]) {
+                        def hostsList = HOSTS_LIST.replaceAll(',', '\n').split('\n').collect { it.trim() }.findAll { it }
+                        env.TARGET_HOSTS = hostsList.join('\n')
+                        echo "Preparing Smart Agent deployment to ${hostsList.size()} hosts: ${hostsList.join(', ')}"
+                    }
+                    
+                    sh """
+                        rm -rf ${STAGING_DIR}
+                        mkdir -p ${STAGING_DIR}
+                    """
+                }
+            }
+        }
+        
+        stage('Extract Smart Agent') {
+            steps {
+                script {
+                    echo "Extracting Smart Agent from ${params.SMARTAGENT_ZIP_PATH}"
+                    
+                    sh """
+                        cd ${STAGING_DIR}
+                        unzip -q ${params.SMARTAGENT_ZIP_PATH} -d appdsmartagent
+                        chmod +x ${EXTRACT_DIR}/smartagentctl
+                    """
+                }
+            }
+        }
+        
+        stage('Configure Smart Agent') {
+            steps {
+                script {
+                    echo "Creating config.ini template"
+                    
+                    def configIni = generateConfigIni(
+                        'PLACEHOLDER_ACCESS_KEY',
+                        params.AGENT_NAME,
+                        params.LOG_LEVEL,
+                        params.REMOTE_INSTALL_DIR
+                    )
+                    
+                    writeFile file: "${EXTRACT_DIR}/config.ini", text: configIni
+                    
+                    echo "config.ini template created (access key will be replaced on each host)"
+                }
+            }
+        }
+        
+        stage('Deploy to Remote Hosts') {
+            steps {
+                script {
+                    withCredentials([
+                        sshUserPrivateKey(credentialsId: 'ssh-private-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USERNAME'),
+                        string(credentialsId: 'account-access-key', variable: 'ACCOUNT_ACCESS_KEY')
+                    ]) {
+                        def hosts = env.TARGET_HOSTS.split('\n').collect { it.trim() }.findAll { it }
+                        
+                        hosts.each { host ->
+                            echo "Deploying Smart Agent to ${host}"
+                            
+                            // Stop any existing Smart Agent and prepare directory
+                            sh """
+                                ssh -i \${SSH_KEY_FILE} \
+                                    -p ${params.SSH_PORT} \
+                                    -o StrictHostKeyChecking=no \
+                                    ${env.SSH_USERNAME}@${host} \
+                                    'if [ -d ${params.REMOTE_INSTALL_DIR} ]; then \
+                                       cd ${params.REMOTE_INSTALL_DIR} && sudo ./smartagentctl stop --service 2>/dev/null || true; \
+                                     fi && \
+                                     sudo rm -rf ${params.REMOTE_INSTALL_DIR} && \
+                                     sudo mkdir -p ${params.REMOTE_INSTALL_DIR} && \
+                                     sudo chown ${env.SSH_USERNAME}:${env.SSH_USERNAME} ${params.REMOTE_INSTALL_DIR}'
+                            """
+                            
+                            // Copy Smart Agent files
+                            sh """
+                                scp -i \${SSH_KEY_FILE} \
+                                    -P ${params.SSH_PORT} \
+                                    -o StrictHostKeyChecking=no \
+                                    -r ${EXTRACT_DIR}/* \
+                                    ${env.SSH_USERNAME}@${host}:${params.REMOTE_INSTALL_DIR}/
+                            """
+                            
+                            // Update config.ini with actual access key on remote host
+                            sh """
+                                ssh -i \${SSH_KEY_FILE} \
+                                    -p ${params.SSH_PORT} \
+                                    -o StrictHostKeyChecking=no \
+                                    ${env.SSH_USERNAME}@${host} \
+                                    "sed -i 's/PLACEHOLDER_ACCESS_KEY/${ACCOUNT_ACCESS_KEY}/g' ${params.REMOTE_INSTALL_DIR}/config.ini"
+                            """
+                            
+                            // Start Smart Agent
+                            sh """
+                                ssh -i \${SSH_KEY_FILE} \
+                                    -p ${params.SSH_PORT} \
+                                    -o StrictHostKeyChecking=no \
+                                    ${env.SSH_USERNAME}@${host} \
+                                    'cd ${params.REMOTE_INSTALL_DIR} && \
+                                     sudo ./smartagentctl start --enable-auto-attach --service \
+                                     --user ${params.APPD_USER} --group ${params.APPD_GROUP}'
+                            """
+                            
+                            echo "Successfully deployed to ${host}"
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Verify Installation') {
+            steps {
+                script {
+                    echo "Verifying Smart Agent installation"
+                    
+                    withCredentials([
+                        sshUserPrivateKey(credentialsId: 'ssh-private-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USERNAME')
+                    ]) {
+                        def hosts = env.TARGET_HOSTS.split('\n').collect { it.trim() }.findAll { it }
+                        
+                        hosts.each { host ->
+                            echo "Checking Smart Agent status on ${host}"
+                            sh """
+                                ssh -i \${SSH_KEY_FILE} \
+                                    -p ${params.SSH_PORT} \
+                                    -o StrictHostKeyChecking=no \
+                                    ${env.SSH_USERNAME}@${host} \
+                                    'cd ${params.REMOTE_INSTALL_DIR} && sudo ./smartagentctl status'
+                            """
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo "Smart Agent successfully deployed to all hosts"
+        }
+        failure {
+            echo "Smart Agent deployment failed. Check logs for details."
+        }
+        always {
+            sh "rm -rf ${STAGING_DIR}"
+        }
+    }
+}
+
+def generateConfigIni(accessKey, agentName, logLevel, remoteDir) {
+    return """ControllerURL    = fso-tme.saas.appdynamics.com
+ControllerPort   = 443
+FMServicePort    = 443
+AccountAccessKey = ${accessKey}
+AccountName      = fso-tme
+EnableSSL        = true
+
+[CommonConfig]
+AgentName            = ${agentName}
+PollingIntervalInSec = 300
+Tags                 = 
+ServiceName          = 
+
+[Telemetry]
+LogLevel  = ${logLevel}
+LogFile   = ${remoteDir}/log.log
+Profiling = false
+
+[TLSClientSetting]
+Insecure        = false
+AgentHTTPProxy  = 
+AgentHTTPSProxy = 
+AgentNoProxy    = 
+
+[TLSSetting]
+CAFile     = 
+CertFile   = 
+KeyFile    = 
+MinVersion = 1.2
+MaxVersion = 1.3
+
+[AutoDiscovery]
+RunAutoDiscovery          = false
+ExcludeLabels             = process.cpu.usage,process.memory.usage
+ExcludeProcesses          = 
+ExcludeUsers              = 
+AutoDiscoveryTimeInterval = 4h
+AutoInstall               = false
+
+[TaskConfig]
+NativeEnable        = true
+UserPortalUserName  = 
+UserPortalPassword  = 
+UserPortalAuth      = none
+AutoUpdateLdPreload = true
+"""
+}
+

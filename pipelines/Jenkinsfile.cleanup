@@ -1,0 +1,111 @@
+pipeline {
+    agent any
+    
+    parameters {
+        string(name: 'REMOTE_INSTALL_DIR', defaultValue: '/opt/appdynamics/smartagent', description: 'Remote directory where Smart Agent is installed')
+        string(name: 'SSH_PORT', defaultValue: '22', description: 'SSH port for remote hosts')
+        booleanParam(name: 'CONFIRM_CLEANUP', defaultValue: false, description: 'Check this box to confirm you want to remove Smart Agent from all hosts')
+    }
+    
+    stages {
+        stage('Validate') {
+            steps {
+                script {
+                    if (!params.CONFIRM_CLEANUP) {
+                        error("Cleanup not confirmed. Please check the CONFIRM_CLEANUP parameter to proceed.")
+                    }
+                    
+                    withCredentials([string(credentialsId: 'deployment-hosts', variable: 'HOSTS_LIST')]) {
+                        def hostsList = HOSTS_LIST.replaceAll(',', '\n').split('\n').collect { it.trim() }.findAll { it }
+                        env.TARGET_HOSTS = hostsList.join('\n')
+                        echo "Preparing to clean up Smart Agent from ${hostsList.size()} hosts: ${hostsList.join(', ')}"
+                    }
+                }
+            }
+        }
+        
+        stage('Stop Smart Agent') {
+            steps {
+                script {
+                    withCredentials([
+                        sshUserPrivateKey(credentialsId: 'ssh-private-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USERNAME')
+                    ]) {
+                        def hosts = env.TARGET_HOSTS.split('\n').collect { it.trim() }.findAll { it }
+                        
+                        hosts.each { host ->
+                            echo "Stopping Smart Agent on ${host}"
+                            
+                            sh """
+                                ssh -i \${SSH_KEY_FILE} \
+                                    -p ${params.SSH_PORT} \
+                                    -o StrictHostKeyChecking=no \
+                                    ${env.SSH_USERNAME}@${host} \
+                                    'cd ${params.REMOTE_INSTALL_DIR} && sudo ./smartagentctl stop --service' || true
+                            """
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Remove Smart Agent') {
+            steps {
+                script {
+                    withCredentials([
+                        sshUserPrivateKey(credentialsId: 'ssh-private-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USERNAME')
+                    ]) {
+                        def hosts = env.TARGET_HOSTS.split('\n').collect { it.trim() }.findAll { it }
+                        
+                        hosts.each { host ->
+                            echo "Removing Smart Agent from ${host}"
+                            
+                            sh """
+                                ssh -i \${SSH_KEY_FILE} \
+                                    -p ${params.SSH_PORT} \
+                                    -o StrictHostKeyChecking=no \
+                                    ${env.SSH_USERNAME}@${host} \
+                                    'sudo rm -rf ${params.REMOTE_INSTALL_DIR}'
+                            """
+                            
+                            echo "Successfully removed Smart Agent from ${host}"
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Verify Cleanup') {
+            steps {
+                script {
+                    withCredentials([
+                        sshUserPrivateKey(credentialsId: 'ssh-private-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USERNAME')
+                    ]) {
+                        def hosts = env.TARGET_HOSTS.split('\n').collect { it.trim() }.findAll { it }
+                        
+                        hosts.each { host ->
+                            echo "Verifying cleanup on ${host}"
+                            
+                            sh """
+                                ssh -i \${SSH_KEY_FILE} \
+                                    -p ${params.SSH_PORT} \
+                                    -o StrictHostKeyChecking=no \
+                                    ${env.SSH_USERNAME}@${host} \
+                                    'test ! -d ${params.REMOTE_INSTALL_DIR} && echo "Smart Agent removed successfully" || echo "WARNING: Directory still exists"'
+                            """
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo "Smart Agent successfully removed from all hosts"
+        }
+        failure {
+            echo "Smart Agent cleanup failed on some hosts. Check logs for details."
+        }
+    }
+}
+
