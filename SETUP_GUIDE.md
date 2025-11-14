@@ -127,44 +127,40 @@ MIIEpAIBAAKCAQEA...
 
 ## Smart Agent Package Setup
 
-Before creating pipelines, you need to download the AppDynamics Smart Agent package to your Jenkins agent.
+Before building the Jenkins container, you need the AppDynamics Smart Agent ZIP in the repository root.
 
 ### Download Smart Agent
 
-1. **SSH into your Jenkins agent**:
+1. **Navigate to repository root**:
    ```bash
-   ssh ubuntu@<jenkins-agent-ip>
+   cd /home/ubuntu/jenkins-sm-lab
    ```
 
-2. **Create directory for Smart Agent packages**:
+2. **Download the Smart Agent ZIP**:
    ```bash
-   sudo mkdir -p /var/jenkins_home/smartagent
-   sudo chown jenkins:jenkins /var/jenkins_home/smartagent
-   ```
+   # Download from AppDynamics
+   curl -o appdsmartagent_64_linux_25.10.0.497.zip "https://download.appdynamics.com/download/prox/download-file/smart-agent/latest/appdsmartagent_64_linux.zip"
    
-   *Note: Adjust the path and ownership based on your Jenkins setup. The default pipeline parameter `SMARTAGENT_ZIP_PATH` expects `/var/jenkins_home/smartagent/appdsmartagent.zip`.*
-
-3. **Download the latest Smart Agent**:
-   ```bash
-   cd /var/jenkins_home/smartagent
-   
-   # Option 1: Download from AppDynamics portal (if you have direct URL)
-   curl -o appdsmartagent.zip "https://download.appdynamics.com/download/prox/download-file/smart-agent/latest/appdsmartagent_64_linux.zip"
-   
-   # Option 2: Transfer from local machine
-   # On your local machine:
-   scp appdsmartagent_64_linux_*.zip ubuntu@<jenkins-agent-ip>:/var/jenkins_home/smartagent/appdsmartagent.zip
+   # Or transfer from another machine
+   scp appdsmartagent_64_linux_*.zip ubuntu@<server-ip>:~/jenkins-sm-lab/
    ```
 
-4. **Verify the download**:
+3. **Verify the download**:
    ```bash
-   ls -lh /var/jenkins_home/smartagent/appdsmartagent.zip
-   unzip -t /var/jenkins_home/smartagent/appdsmartagent.zip | head -5
+   ls -lh appdsmartagent_64_linux_25.10.0.497.zip
    ```
 
-### Alternative: Use Custom Path
+### How It Works
 
-If you prefer a different location, download the zip to your chosen directory and update the `SMARTAGENT_ZIP_PATH` parameter when running the pipeline.
+The Dockerfile copies the ZIP file into the Jenkins container during the Docker build:
+```dockerfile
+COPY appdsmartagent_64_linux_25.10.0.497.zip /var/jenkins_home/smartagent/appdsmartagent.zip
+```
+
+The deploy pipeline reads it from `/var/jenkins_home/smartagent/appdsmartagent.zip` (inside the Jenkins container) and deploys it to target hosts.
+
+
+## Pipeline Creation
 
 
 ## Pipeline Creation

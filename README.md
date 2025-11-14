@@ -78,27 +78,20 @@ Each pipeline accepts these parameters:
 - `SMARTAGENT_GROUP` - Group for Smart Agent service (optional)
 
 
-### 4️⃣ Download Smart Agent Package
+### 4️⃣ Place Smart Agent ZIP in Repository
 
-Download the AppDynamics Smart Agent to your Jenkins agent:
+The Smart Agent ZIP file must be in the repository root before building the Jenkins container:
 
 ```bash
-# SSH into Jenkins agent
-ssh ubuntu@<jenkins-agent-ip>
-
-# Create directory
-sudo mkdir -p /var/jenkins_home/smartagent
-sudo chown jenkins:jenkins /var/jenkins_home/smartagent
-
-# Download Smart Agent
-cd /var/jenkins_home/smartagent
-curl -o appdsmartagent.zip "https://download.appdynamics.com/download/prox/download-file/smart-agent/latest/appdsmartagent_64_linux.zip"
-
-# Or transfer from local machine
-# scp appdsmartagent_64_linux_*.zip ubuntu@<jenkins-agent-ip>:/var/jenkins_home/smartagent/appdsmartagent.zip
+# Download Smart Agent to repository root
+cd /home/ubuntu/jenkins-sm-lab
+curl -o appdsmartagent_64_linux_25.10.0.497.zip "https://download.appdynamics.com/download/prox/download-file/smart-agent/latest/appdsmartagent_64_linux.zip"
 
 # Verify
-ls -lh appdsmartagent.zip
+ls -lh appdsmartagent_64_linux_25.10.0.497.zip
+```
+
+**Note**: The Dockerfile copies this ZIP into the Jenkins container at `/var/jenkins_home/smartagent/appdsmartagent.zip` during build.
 ```
 
 ### 5️⃣ Create Jenkins Pipelines

@@ -5,7 +5,7 @@ Get up and running with Jenkins AppDynamics Smart Agent management in minutes.
 ## TL;DR
 
 1. **Setup Jenkins credentials** with IDs: `ssh-private-key`, `deployment-hosts`, `account-access-key`
-2. **Download Smart Agent** to Jenkins agent at `/var/jenkins_home/smartagent/appdsmartagent.zip`
+2. **Place Smart Agent ZIP** in repository root (copied into Jenkins container during build)
 3. **Create pipelines** from `pipelines/*.jenkinsfile`
 4. **Run** → Build with Parameters
 
@@ -22,21 +22,16 @@ Get up and running with Jenkins AppDynamics Smart Agent management in minutes.
 | Secret text | `account-access-key` | AppD access key |
 
 
-### 2. Download Smart Agent
+### 2. Place Smart Agent ZIP in Repository
 
-**On your Jenkins agent**:
+Download the Smart Agent ZIP to the repository root:
 
 ```bash
-# Create directory
-sudo mkdir -p /var/jenkins_home/smartagent
-sudo chown jenkins:jenkins /var/jenkins_home/smartagent
-
-# Download
-cd /var/jenkins_home/smartagent
-curl -o appdsmartagent.zip "https://download.appdynamics.com/download/prox/download-file/smart-agent/latest/appdsmartagent_64_linux.zip"
+cd /home/ubuntu/jenkins-sm-lab
+curl -o appdsmartagent_64_linux_25.10.0.497.zip "https://download.appdynamics.com/download/prox/download-file/smart-agent/latest/appdsmartagent_64_linux.zip"
 ```
 
-*Alternative: Transfer from local machine using `scp`*
+**What happens**: The Dockerfile copies this ZIP into the Jenkins container at `/var/jenkins_home/smartagent/appdsmartagent.zip` during the Docker build.
 
 ### 3. Create First Pipeline
 

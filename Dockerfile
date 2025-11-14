@@ -17,8 +17,7 @@ RUN jenkins-plugin-cli --plugin-file /usr/share/jenkins/ref/plugins.txt
 RUN mkdir -p /usr/share/jenkins/ref/jobs
 
 # Create directory for SmartAgent and copy zip file
-RUN mkdir -p /var/jenkins_home/smartagent
-COPY appdsmartagent_64_linux_25.10.0.497.zip /var/jenkins_home/smartagent/
+COPY appdsmartagent_64_linux_25.10.0.497.zip /var/jenkins_home/smartagent/appdsmartagent.zip
 
 # Switch back to jenkins user
 USER jenkins
