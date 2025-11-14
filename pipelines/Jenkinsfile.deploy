@@ -3,7 +3,7 @@ pipeline {
     
     parameters {
         string(name: 'SMARTAGENT_ZIP_PATH', defaultValue: '/var/jenkins_home/smartagent/appdsmartagent.zip', description: 'Path to Smart Agent ZIP file on Jenkins server')
-        string(name: 'REMOTE_INSTALL_DIR', defaultValue: '/opt/appdynamics/smartagent', description: 'Remote directory for Smart Agent installation')
+        string(name: 'REMOTE_INSTALL_DIR', defaultValue: '/opt/appdynamics/appdsmartagent', description: 'Remote directory for Smart Agent installation')
         string(name: 'APPD_USER', defaultValue: 'ubuntu', description: 'User to run Smart Agent process')
         string(name: 'APPD_GROUP', defaultValue: 'ubuntu', description: 'Group to run Smart Agent process')
         string(name: 'SSH_PORT', defaultValue: '22', description: 'SSH port for remote hosts')
