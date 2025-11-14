@@ -137,29 +137,12 @@ java -jar jenkins-cli.jar -s http://your-jenkins:8080/ build "Deploy-Smart-Agent
 ### Deployment (1 pipeline)
 | Pipeline | Description | File |
 |----------|-------------|------|
-| **01. Deploy Smart Agent** | Installs Smart Agent and starts service | `01-deploy-smart-agent.jenkinsfile` |
+| **01. Deploy Smart Agent** | Installs Smart Agent and starts service | `Jenkinsfile.deploy` |
 
-### Agent Installation (4 pipelines)
-| Pipeline | Command | File |
-|----------|---------|------|
-| **02. Install Machine Agent** | `smartagentctl install machine` | `02-install-machine-agent.jenkinsfile` |
-| **03. Install Java Agent** | `smartagentctl install java` | `03-install-java-agent.jenkinsfile` |
-| **04. Install Node Agent** | `smartagentctl install node` | `04-install-node-agent.jenkinsfile` |
-| **05. Install Database Agent** | `smartagentctl install db` | `05-install-db-agent.jenkinsfile` |
-
-### Smart Agent Management (2 pipelines)
+### Smart Agent Management (1 pipelines)
 | Pipeline | Description | File |
 |----------|-------------|------|
-| **06. Stop and Clean Smart Agent** | Stops service and purges data | `06-stop-clean-smartagent.jenkinsfile` |
-| **11. Cleanup All Agents** | Deletes /opt/appdynamics directory | `11-cleanup-all-agents.jenkinsfile` |
-
-### Agent Uninstallation (4 pipelines)
-| Pipeline | Command | File |
-|----------|---------|------|
-| **07. Uninstall Machine Agent** | `smartagentctl uninstall machine` | `07-uninstall-machine-agent.jenkinsfile` |
-| **08. Uninstall Java Agent** | `smartagentctl uninstall java` | `08-uninstall-java-agent.jenkinsfile` |
-| **09. Uninstall Node Agent** | `smartagentctl uninstall node` | `09-uninstall-node-agent.jenkinsfile` |
-| **10. Uninstall Database Agent** | `smartagentctl uninstall db` | `10-uninstall-db-agent.jenkinsfile` |
+| **02. Cleanup All Agents** | Deletes /opt/appdynamics directory | `Jenkinsfile.cleanup` |
 
 **Total: 11 pipelines** - All support configurable batch sizes (default: 256)
 
