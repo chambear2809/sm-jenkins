@@ -9,7 +9,7 @@ jenkins-sm-lab/
 ├── README.md                    # Main project overview and documentation
 ├── QUICK_START.md               # 5-minute getting started guide
 ├── SETUP_GUIDE.md              # Detailed Jenkins configuration guide
-├── CONVERSION_NOTES.md         # GitHub Actions → Jenkins migration notes
+├── INDEX.md                    # This file - project navigation
 ├── INDEX.md                    # This file - project navigation
 ├── .gitignore                  # Git ignore rules
 └── pipelines/                  # All Jenkins pipeline definitions
@@ -33,10 +33,6 @@ jenkins-sm-lab/
 2. **Then read**: [README.md](README.md) - Understand the system architecture
 3. **Deep dive**: [SETUP_GUIDE.md](SETUP_GUIDE.md) - Complete configuration details
 
-### For GitHub Actions Users
-1. **Migration guide**: [CONVERSION_NOTES.md](CONVERSION_NOTES.md)
-2. **Comparison table**: See "Key Conversions" section
-3. **Side-by-side**: Run both systems in parallel during transition
 
 ### For Jenkins Administrators
 1. **Setup**: [SETUP_GUIDE.md](SETUP_GUIDE.md) - Credentials, agents, plugins
@@ -170,14 +166,12 @@ Complete Removal:
 - [Agent Installation Guides](https://docs.appdynamics.com/appd/23.x/latest/)
 
 ### Related Projects
-- **GitHub Actions Version**: `../github-action-lab/`
-- **Original Workflows**: `.github/workflows/`
 
 ## 📝 Version History
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 1.0.0 | 2024-11 | Initial Jenkins conversion from GitHub Actions |
+| 1.0.0 | 2024-11 | Initial Jenkins Smart Agent deployment system |
 | | | - 11 pipelines converted |
 | | | - Full documentation suite |
 | | | - Production-ready |

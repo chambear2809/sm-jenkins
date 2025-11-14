@@ -689,18 +689,6 @@ graph LR
 
 ---
 
-## Comparison with GitHub Actions Architecture
-
-| Aspect | GitHub Actions | Jenkins |
-|--------|----------------|---------|
-| **Runner Location** | GitHub-hosted or self-hosted | Self-hosted agent required |
-| **Networking** | Runner in VPC (self-hosted) | Agent in VPC |
-| **Batching** | Matrix strategy (parallel) | Sequential batches |
-| **State Management** | GitHub outputs | Workspace files |
-| **Credentials** | GitHub Secrets | Jenkins Credentials |
-| **Scalability** | Per-job isolation | Shared agent resources |
-| **Cost** | Minutes-based (hosted) | Infrastructure cost only |
-
 ---
 
 ## References

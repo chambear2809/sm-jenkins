@@ -229,20 +229,8 @@ Each pipeline includes:
 - **[Quick Start](QUICK_START.md)** - Get running in 5 minutes
 - **[Setup Guide](SETUP_GUIDE.md)** - Detailed Jenkins configuration instructions
 - **[Architecture](ARCHITECTURE.md)** - System diagrams and technical architecture
-- **[Conversion Notes](CONVERSION_NOTES.md)** - GitHub Actions → Jenkins migration guide
 - **[Project Index](INDEX.md)** - Complete project navigation and reference
 
-## 🔄 Migration from GitHub Actions
-
-This project is a Jenkins conversion of a GitHub Actions lab. Key differences:
-
-| Feature | GitHub Actions | Jenkins |
-|---------|----------------|---------|
-| Workflow Definition | YAML | Groovy (Jenkinsfile) |
-| Secret Management | GitHub Secrets | Jenkins Credentials |
-| Matrix Strategy | Built-in matrix | Custom batching logic |
-| Runner/Agent | self-hosted runner | Jenkins agent |
-| Trigger | workflow_dispatch | Build with Parameters |
 
 ## 🤝 Contributing
 
