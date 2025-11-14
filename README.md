@@ -106,10 +106,10 @@ For each Jenkinsfile in the `pipelines/` directory:
    - Definition: Pipeline script from SCM
    - SCM: Git
    - Repository URL: Your repository URL
-   - Script Path: `pipelines/01-deploy-smart-agent.jenkinsfile`
+   - Script Path: `pipelines/Jenkinsfile.deploy`
 6. Save
 
-Repeat for all 11 pipelines.
+Repeat for the second pipeline (Jenkinsfile.cleanup).
 
 ### 6️⃣ Deploy!
 
@@ -132,12 +132,12 @@ java -jar jenkins-cli.jar -s http://your-jenkins:8080/ build "Deploy-Smart-Agent
 |----------|-------------|------|
 | **01. Deploy Smart Agent** | Installs Smart Agent and starts service | `Jenkinsfile.deploy` |
 
-### Smart Agent Management (1 pipelines)
+### Smart Agent Management (1 pipeline)
 | Pipeline | Description | File |
 |----------|-------------|------|
 | **02. Cleanup All Agents** | Deletes /opt/appdynamics directory | `Jenkinsfile.cleanup` |
 
-**Total: 11 pipelines** - All support configurable batch sizes (default: 256)
+**Total: 2 pipelines** - All support configurable batch sizes (default: 256)
 
 ## 🛠️ How It Works
 

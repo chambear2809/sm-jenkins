@@ -13,17 +13,8 @@ jenkins-sm-lab/
 ├── INDEX.md                    # This file - project navigation
 ├── .gitignore                  # Git ignore rules
 └── pipelines/                  # All Jenkins pipeline definitions
-    ├── 01-deploy-smart-agent.jenkinsfile
-    ├── 02-install-machine-agent.jenkinsfile
-    ├── 03-install-java-agent.jenkinsfile
-    ├── 04-install-node-agent.jenkinsfile
-    ├── 05-install-db-agent.jenkinsfile
-    ├── 06-stop-clean-smartagent.jenkinsfile
-    ├── 07-uninstall-machine-agent.jenkinsfile
-    ├── 08-uninstall-java-agent.jenkinsfile
-    ├── 09-uninstall-node-agent.jenkinsfile
-    ├── 10-uninstall-db-agent.jenkinsfile
-    └── 11-cleanup-all-agents.jenkinsfile
+    ├── Jenkinsfile.deploy            # Deploy Smart Agent
+    └── Jenkinsfile.cleanup           # Cleanup All Agents
 ```
 
 ## 📋 Documentation Guide
@@ -50,7 +41,6 @@ jenkins-sm-lab/
 - [ ] [Install Jenkins plugins](SETUP_GUIDE.md#required-jenkins-plugins)
 - [ ] [Configure Jenkins agent](SETUP_GUIDE.md#1-configure-jenkins-agent)
 - [ ] [Add credentials](SETUP_GUIDE.md#credentials-setup)
-- [ ] [Create pipelines](SETUP_GUIDE.md#pipeline-creation)
 
 ### Deployment
 - [ ] Deploy Smart Agent: `pipelines/01-deploy-smart-agent.jenkinsfile`
@@ -69,32 +59,12 @@ jenkins-sm-lab/
 
 ## 📊 Pipeline Reference
 
-### Deployment & Installation
+### Available Pipelines
 
 | # | Pipeline | File | Description | Parameters |
 |---|----------|------|-------------|------------|
-| 01 | Deploy Smart Agent | `01-deploy-smart-agent.jenkinsfile` | Full Smart Agent deployment with config | BATCH_SIZE, SSH_USER, SMARTAGENT_USER, SMARTAGENT_GROUP |
-| 02 | Install Machine Agent | `02-install-machine-agent.jenkinsfile` | Install Machine monitoring agent | BATCH_SIZE, SSH_USER |
-| 03 | Install Java Agent | `03-install-java-agent.jenkinsfile` | Install Java APM agent | BATCH_SIZE, SSH_USER |
-| 04 | Install Node Agent | `04-install-node-agent.jenkinsfile` | Install Node.js APM agent | BATCH_SIZE, SSH_USER |
-| 05 | Install DB Agent | `05-install-db-agent.jenkinsfile` | Install Database monitoring agent | BATCH_SIZE, SSH_USER |
-
-### Management & Cleanup
-
-| # | Pipeline | File | Description | Parameters |
-|---|----------|------|-------------|------------|
-| 06 | Stop & Clean Smart Agent | `06-stop-clean-smartagent.jenkinsfile` | Stop service and clean data | BATCH_SIZE, SSH_USER |
-| 11 | Cleanup All Agents | `11-cleanup-all-agents.jenkinsfile` | Delete /opt/appdynamics directory | BATCH_SIZE, SSH_USER |
-
-### Uninstallation
-
-| # | Pipeline | File | Description | Parameters |
-|---|----------|------|-------------|------------|
-| 07 | Uninstall Machine Agent | `07-uninstall-machine-agent.jenkinsfile` | Remove Machine agent | BATCH_SIZE, SSH_USER |
-| 08 | Uninstall Java Agent | `08-uninstall-java-agent.jenkinsfile` | Remove Java agent | BATCH_SIZE, SSH_USER |
-| 09 | Uninstall Node Agent | `09-uninstall-node-agent.jenkinsfile` | Remove Node agent | BATCH_SIZE, SSH_USER |
-| 10 | Uninstall DB Agent | `10-uninstall-db-agent.jenkinsfile` | Remove Database agent | BATCH_SIZE, SSH_USER |
-
+| 01 | Deploy Smart Agent | `Jenkinsfile.deploy` | Full Smart Agent deployment with config | BATCH_SIZE, SSH_USER, SMARTAGENT_USER, SMARTAGENT_GROUP |
+| 02 | Cleanup All Agents | `Jenkinsfile.cleanup` | Delete /opt/appdynamics directory | CONFIRM_CLEANUP, SSH_USER |
 ## 🔑 Required Credentials
 
 All pipelines require these Jenkins credentials to be configured:
@@ -107,8 +77,8 @@ All pipelines require these Jenkins credentials to be configured:
 
 ## 📈 Statistics
 
-- **Total Pipelines**: 11
-- **Lines of Code**: ~1,096 (all Jenkinsfiles)
+- **Total Pipelines**: 2
+- **Lines of Code**: ~330 (all Jenkinsfiles)
 - **Documentation**: ~950 lines
 - **Supported Scale**: 1 to 10,000+ hosts
 - **Default Batch Size**: 256 hosts
@@ -172,7 +142,7 @@ Complete Removal:
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0.0 | 2024-11 | Initial Jenkins Smart Agent deployment system |
-| | | - 11 pipelines converted |
+| | | - 2 pipelines created |
 | | | - Full documentation suite |
 | | | - Production-ready |
 
@@ -189,7 +159,7 @@ Complete Removal:
 1. Test changes on non-production hosts
 2. Update inline comments
 3. Update documentation if behavior changes
-4. Verify all 11 pipelines still work
+4. Verify both pipelines work correctly
 
 ### Reporting Issues
 1. Check [SETUP_GUIDE.md#troubleshooting](SETUP_GUIDE.md#troubleshooting)

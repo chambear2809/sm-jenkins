@@ -6,7 +6,7 @@ Get up and running with Jenkins AppDynamics Smart Agent management in minutes.
 
 1. **Setup Jenkins credentials** with IDs: `ssh-private-key`, `deployment-hosts`, `account-access-key`
 2. **Place Smart Agent ZIP** in repository root (copied into Jenkins container during build)
-3. **Create pipelines** from `pipelines/*.jenkinsfile`
+3. **Create pipelines** from `pipelines/Jenkinsfile.deploy and pipelines/Jenkinsfile.cleanup`
 4. **Run** → Build with Parameters
 
 ## Minimum Setup (5 minutes)
@@ -35,11 +35,11 @@ curl -o appdsmartagent_64_linux_25.10.0.497.zip "https://download.appdynamics.co
 
 ### 3. Create First Pipeline
 
-1. **New Item** → Name: `01-Deploy-Smart-Agent` → **Pipeline**
+1. **New Item** → Name: `Deploy-Smart-Agent` → **Pipeline**
 2. **Pipeline** section:
    - Definition: `Pipeline script from SCM`
    - Repository URL: Your repo
-   - Script Path: `pipelines/01-deploy-smart-agent.jenkinsfile`
+   - Script Path: `pipelines/Jenkinsfile.deploy`
 3. **Save**
 
 ### 4. Run It
@@ -52,29 +52,16 @@ curl -o appdsmartagent_64_linux_25.10.0.497.zip "https://download.appdynamics.co
 
 ### Deploy Smart Agent to All Hosts
 ```
-Pipeline: 01-Deploy-Smart-Agent
+Pipeline: Deploy-Smart-Agent
 Parameters: Default (batch_size=256)
-```
-
-### Install Node Agent
-```
-Pipeline: 04-Install-Node-Agent
-Parameters: Default
-```
-
-### Stop and Clean
-```
-Pipeline: 06-Stop-Clean-SmartAgent
-Parameters: Default
 ```
 
 ### Complete Cleanup
 ```
-Pipeline: 11-Cleanup-All-Agents
-Parameters: Default
+Pipeline: Cleanup-All-Agents
+Parameters: CONFIRM_CLEANUP=true
 ⚠️ Warning: This deletes /opt/appdynamics directory!
 ```
-
 ## Pipeline Parameters
 
 All pipelines accept:
@@ -114,23 +101,23 @@ Manage Jenkins → Credentials → Check IDs match exactly
 ### View pipeline workspace
 ```bash
 # On Jenkins agent machine
-ls /path/to/jenkins/workspace/01-Deploy-Smart-Agent/
+ls /path/to/jenkins/workspace/Deploy-Smart-Agent/
 ```
 
 ## Pipeline Execution Order (Typical Workflow)
 
 ```
-1. 01-Deploy-Smart-Agent          # Initial deployment
+1. Deploy-Smart-Agent          # Initial deployment
 2. 02-Install-Machine-Agent       # Install agents as needed
 3. 03-Install-Java-Agent
-4. 04-Install-Node-Agent
+4. Deploy-Smart-Agent
 5. 05-Install-DB-Agent
    
    ... (use as needed) ...
 
-6. 06-Stop-Clean-SmartAgent       # Maintenance/troubleshooting
+6. Cleanup-All-Agents       # Maintenance/troubleshooting
 7. 07-09-10 Uninstall-*-Agent     # Remove specific agents
-8. 11-Cleanup-All-Agents          # Complete removal
+8. Cleanup-All-Agents          # Complete removal
 ```
 
 ## File Locations (On Target Hosts)
@@ -169,7 +156,7 @@ Trigger build:
 ```bash
 java -jar jenkins-cli.jar -s http://your-jenkins:8080/ \
   -auth admin:token \
-  build "01-Deploy-Smart-Agent" \
+  build "Deploy-Smart-Agent" \
   -p BATCH_SIZE=128 \
   -p SSH_USER=ubuntu
 ```
@@ -204,11 +191,11 @@ java -jar jenkins-cli.jar -s http://your-jenkins:8080/ \
 
 ```bash
 # 1. Deploy Smart Agent
-Build: 01-Deploy-Smart-Agent (default params)
+Build: Deploy-Smart-Agent (default params)
 Wait: ✅ Success
 
 # 2. Install Node.js agent on all hosts
-Build: 04-Install-Node-Agent (default params)
+Build: Deploy-Smart-Agent (default params)
 Wait: ✅ Success
 
 # 3. Verify on one host
@@ -220,9 +207,9 @@ sudo ./smartagentctl status
 
 # 4. Later, to remove:
 Build: 09-Uninstall-Node-Agent
-Build: 06-Stop-Clean-SmartAgent
+Build: Cleanup-All-Agents
 ```
 
 ---
 
-**Ready?** Start with pipeline `01-Deploy-Smart-Agent`!
+**Ready?** Start with pipeline `Deploy-Smart-Agent`!

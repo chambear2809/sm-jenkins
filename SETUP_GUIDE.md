@@ -167,7 +167,7 @@ The deploy pipeline reads it from `/var/jenkins_home/smartagent/appdsmartagent.z
 
 ### Method 1: Pipeline from SCM (Recommended)
 
-For each of the 11 pipelines:
+For each of the 2 pipelines:
 
 1. **Create New Item**
    - Go to Jenkins Dashboard
@@ -185,11 +185,11 @@ For each of the 11 pipelines:
      - Repository URL: `https://github.com/your-org/jenkins-sm-lab.git`
      - Credentials: Add if private repo
      - Branch: `*/main` or `*/master`
-     - Script Path: `pipelines/01-deploy-smart-agent.jenkinsfile`
+     - Script Path: `pipelines/Jenkinsfile.deploy`
 
 3. **Save**
 
-4. **Repeat** for all 11 pipelines with appropriate names and script paths
+4. **Repeat** for both pipelines (Jenkinsfile.deploy and Jenkinsfile.cleanup) with appropriate names and script paths
 
 ### Method 2: Direct Pipeline Script
 
