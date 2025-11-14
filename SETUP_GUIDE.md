@@ -125,6 +125,48 @@ MIIEpAIBAAKCAQEA...
 - Rotate SSH keys periodically
 - Use least-privilege IAM roles for EC2 instances
 
+## Smart Agent Package Setup
+
+Before creating pipelines, you need to download the AppDynamics Smart Agent package to your Jenkins agent.
+
+### Download Smart Agent
+
+1. **SSH into your Jenkins agent**:
+   ```bash
+   ssh ubuntu@<jenkins-agent-ip>
+   ```
+
+2. **Create directory for Smart Agent packages**:
+   ```bash
+   sudo mkdir -p /var/jenkins_home/smartagent
+   sudo chown jenkins:jenkins /var/jenkins_home/smartagent
+   ```
+   
+   *Note: Adjust the path and ownership based on your Jenkins setup. The default pipeline parameter `SMARTAGENT_ZIP_PATH` expects `/var/jenkins_home/smartagent/appdsmartagent.zip`.*
+
+3. **Download the latest Smart Agent**:
+   ```bash
+   cd /var/jenkins_home/smartagent
+   
+   # Option 1: Download from AppDynamics portal (if you have direct URL)
+   curl -o appdsmartagent.zip "https://download.appdynamics.com/download/prox/download-file/smart-agent/latest/appdsmartagent_64_linux.zip"
+   
+   # Option 2: Transfer from local machine
+   # On your local machine:
+   scp appdsmartagent_64_linux_*.zip ubuntu@<jenkins-agent-ip>:/var/jenkins_home/smartagent/appdsmartagent.zip
+   ```
+
+4. **Verify the download**:
+   ```bash
+   ls -lh /var/jenkins_home/smartagent/appdsmartagent.zip
+   unzip -t /var/jenkins_home/smartagent/appdsmartagent.zip | head -5
+   ```
+
+### Alternative: Use Custom Path
+
+If you prefer a different location, download the zip to your chosen directory and update the `SMARTAGENT_ZIP_PATH` parameter when running the pipeline.
+
+
 ## Pipeline Creation
 
 ### Method 1: Pipeline from SCM (Recommended)

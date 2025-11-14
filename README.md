@@ -77,7 +77,31 @@ Each pipeline accepts these parameters:
 - `SMARTAGENT_USER` - User for Smart Agent service (optional)
 - `SMARTAGENT_GROUP` - Group for Smart Agent service (optional)
 
-### 4️⃣ Create Jenkins Pipelines
+
+### 4️⃣ Download Smart Agent Package
+
+Download the AppDynamics Smart Agent to your Jenkins agent:
+
+```bash
+# SSH into Jenkins agent
+ssh ubuntu@<jenkins-agent-ip>
+
+# Create directory
+sudo mkdir -p /var/jenkins_home/smartagent
+sudo chown jenkins:jenkins /var/jenkins_home/smartagent
+
+# Download Smart Agent
+cd /var/jenkins_home/smartagent
+curl -o appdsmartagent.zip "https://download.appdynamics.com/download/prox/download-file/smart-agent/latest/appdsmartagent_64_linux.zip"
+
+# Or transfer from local machine
+# scp appdsmartagent_64_linux_*.zip ubuntu@<jenkins-agent-ip>:/var/jenkins_home/smartagent/appdsmartagent.zip
+
+# Verify
+ls -lh appdsmartagent.zip
+```
+
+### 5️⃣ Create Jenkins Pipelines
 
 For each Jenkinsfile in the `pipelines/` directory:
 
@@ -94,7 +118,7 @@ For each Jenkinsfile in the `pipelines/` directory:
 
 Repeat for all 11 pipelines.
 
-### 5️⃣ Deploy!
+### 6️⃣ Deploy!
 
 **Via Jenkins UI:**
 1. Go to your pipeline (e.g., "Deploy-Smart-Agent")

@@ -2,7 +2,7 @@ FROM jenkins/jenkins:lts
 
 # Set admin credentials
 ENV JENKINS_ADMIN_ID=admin
-ENV JENKINS_ADMIN_PASSWORD=Acivxlan666!
+ENV JENKINS_ADMIN_PASSWORD=C1sco1234!
 
 # Switch to root to install plugins
 USER root

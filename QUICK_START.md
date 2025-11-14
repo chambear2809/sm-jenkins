@@ -5,8 +5,9 @@ Get up and running with Jenkins AppDynamics Smart Agent management in minutes.
 ## TL;DR
 
 1. **Setup Jenkins credentials** with IDs: `ssh-private-key`, `deployment-hosts`, `account-access-key`
-2. **Create pipelines** from `pipelines/*.jenkinsfile`
-3. **Run** → Build with Parameters
+2. **Download Smart Agent** to Jenkins agent at `/var/jenkins_home/smartagent/appdsmartagent.zip`
+3. **Create pipelines** from `pipelines/*.jenkinsfile`
+4. **Run** → Build with Parameters
 
 ## Minimum Setup (5 minutes)
 
@@ -20,7 +21,24 @@ Get up and running with Jenkins AppDynamics Smart Agent management in minutes.
 | Secret text | `deployment-hosts` | IPs (one per line) |
 | Secret text | `account-access-key` | AppD access key |
 
-### 2. Create First Pipeline
+
+### 2. Download Smart Agent
+
+**On your Jenkins agent**:
+
+```bash
+# Create directory
+sudo mkdir -p /var/jenkins_home/smartagent
+sudo chown jenkins:jenkins /var/jenkins_home/smartagent
+
+# Download
+cd /var/jenkins_home/smartagent
+curl -o appdsmartagent.zip "https://download.appdynamics.com/download/prox/download-file/smart-agent/latest/appdsmartagent_64_linux.zip"
+```
+
+*Alternative: Transfer from local machine using `scp`*
+
+### 3. Create First Pipeline
 
 1. **New Item** → Name: `01-Deploy-Smart-Agent` → **Pipeline**
 2. **Pipeline** section:
@@ -29,7 +47,7 @@ Get up and running with Jenkins AppDynamics Smart Agent management in minutes.
    - Script Path: `pipelines/01-deploy-smart-agent.jenkinsfile`
 3. **Save**
 
-### 3. Run It
+### 4. Run It
 
 1. Click **Build with Parameters**
 2. Accept defaults (or adjust batch size)
