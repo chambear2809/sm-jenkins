@@ -8,7 +8,7 @@ Automated deployment and lifecycle management of AppDynamics Smart Agent across 
 
 ## 🎯 Overview
 
-This lab demonstrates how to use Jenkins to manage AppDynamics Smart Agent and various AppDynamics agents (Node, Machine, DB, Java) across multiple Ubuntu EC2 instances within a single AWS VPC. The project includes 11 parameterized pipelines covering the complete agent lifecycle.
+This lab demonstrates how to use Jenkins to manage AppDynamics Smart Agent across multiple Ubuntu EC2 instances within a single AWS VPC. The project includes 2 parameterized pipelines covering the complete Smart Agent lifecycle.
 
 **Key Features:**
 - 🚀 **Parallel Deployment** - Deploy to multiple hosts simultaneously
