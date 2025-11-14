@@ -1,4 +1,4 @@
-# AppDynamics Smart Agent Management with Jenkins
+# Splunk AppDynamics Smart Agent Management with Jenkins
 
 [![Jenkins](https://img.shields.io/badge/Jenkins-D24939?style=flat&logo=jenkins&logoColor=white)](https://www.jenkins.io/)
 [![AWS](https://img.shields.io/badge/AWS-232F3E?style=flat&logo=amazon-aws&logoColor=white)](https://aws.amazon.com/)
