@@ -2,7 +2,7 @@ pipeline {
     agent { label 'linux' }
     
     parameters {
-        string(name: 'REMOTE_INSTALL_DIR', defaultValue: '/opt/appdynamics/smartagent', description: 'Remote directory where Smart Agent is installed')
+        string(name: 'REMOTE_INSTALL_DIR', defaultValue: '/opt/appdynamics/appdsmartagent', description: 'Remote directory where Smart Agent is installed')
         string(name: 'SSH_PORT', defaultValue: '22', description: 'SSH port for remote hosts')
         booleanParam(name: 'CONFIRM_CLEANUP', defaultValue: false, description: 'Check this box to confirm you want to remove Smart Agent from all hosts')
     }
