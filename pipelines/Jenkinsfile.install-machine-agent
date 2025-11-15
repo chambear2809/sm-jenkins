@@ -6,7 +6,6 @@ pipeline {
         string(name: 'SSH_PORT', defaultValue: '22', description: 'SSH port for remote hosts')
         string(name: 'APPD_USER', defaultValue: 'ubuntu', description: 'User to run Machine Agent process')
         string(name: 'APPD_GROUP', defaultValue: 'ubuntu', description: 'Group to run Machine Agent process')
-        string(name: 'MACHINE_AGENT_NAME', defaultValue: 'machine-agent', description: 'Name for the Machine Agent')
         string(name: 'TIER_NAME', defaultValue: '', description: 'Tier name for the Machine Agent (optional)')
         string(name: 'NODE_NAME', defaultValue: '', description: 'Node name for the Machine Agent (optional)')
         choice(name: 'DOWNLOAD_PROTOCOL', choices: ['download_portal', 'local', 'http'], description: 'Download protocol for agent')
@@ -84,9 +83,6 @@ pipeline {
                             }
                             
                             // Add optional configuration
-                            if (params.MACHINE_AGENT_NAME) {
-                                installCmd += " --agent-name ${params.MACHINE_AGENT_NAME}"
-                            }
                             if (params.TIER_NAME) {
                                 installCmd += " --tier-name ${params.TIER_NAME}"
                             }
