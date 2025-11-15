@@ -1,0 +1,176 @@
+pipeline {
+    agent { label 'linux' }
+    
+    parameters {
+        string(name: 'REMOTE_INSTALL_DIR', defaultValue: '/opt/appdynamics/appdsmartagent', description: 'Remote directory where Smart Agent is installed')
+        string(name: 'SSH_PORT', defaultValue: '22', description: 'SSH port for remote hosts')
+        string(name: 'APPD_USER', defaultValue: 'ubuntu', description: 'User to run Database Agent process')
+        string(name: 'APPD_GROUP', defaultValue: 'ubuntu', description: 'Group to run Database Agent process')
+        string(name: 'DB_AGENT_NAME', defaultValue: 'db-agent', description: 'Name for the Database Agent')
+        choice(name: 'DOWNLOAD_PROTOCOL', choices: ['download_portal', 'local', 'http'], description: 'Download protocol for agent')
+        string(name: 'DOWNLOAD_URI', defaultValue: '', description: 'Download URI (required if using local or http protocol)')
+        
+        // Database-specific parameters
+        string(name: 'DB_HOST', defaultValue: '', description: 'Database host address (required)')
+        string(name: 'DB_PORT', defaultValue: '', description: 'Database port (required)')
+        choice(name: 'DB_TYPE', choices: ['mysql', 'postgresql', 'oracle', 'sqlserver', 'mongodb'], description: 'Database type')
+        string(name: 'DB_USERNAME', defaultValue: '', description: 'Database username for monitoring (required)')
+        password(name: 'DB_PASSWORD', defaultValue: '', description: 'Database password for monitoring (required)')
+        string(name: 'DB_NAME', defaultValue: '', description: 'Database name/SID to monitor')
+    }
+    
+    stages {
+        stage('Preparation') {
+            steps {
+                script {
+                    withCredentials([string(credentialsId: 'deployment-hosts', variable: 'HOSTS_LIST')]) {
+                        def hostsList = HOSTS_LIST.replaceAll(',', '\n').split('\n').collect { it.trim() }.findAll { it }
+                        env.TARGET_HOSTS = hostsList.join('\n')
+                        echo "Preparing Database Agent installation on ${hostsList.size()} hosts: ${hostsList.join(', ')}"
+                    }
+                    
+                    // Validate required parameters
+                    if (params.DOWNLOAD_PROTOCOL != 'download_portal' && !params.DOWNLOAD_URI) {
+                        error("DOWNLOAD_URI is required when using '${params.DOWNLOAD_PROTOCOL}' protocol")
+                    }
+                    
+                    if (!params.DB_HOST) {
+                        error("DB_HOST is required for Database Agent installation")
+                    }
+                    
+                    if (!params.DB_PORT) {
+                        error("DB_PORT is required for Database Agent installation")
+                    }
+                    
+                    if (!params.DB_USERNAME) {
+                        error("DB_USERNAME is required for Database Agent installation")
+                    }
+                    
+                    if (!params.DB_PASSWORD) {
+                        error("DB_PASSWORD is required for Database Agent installation")
+                    }
+                }
+            }
+        }
+        
+        stage('Verify Smart Agent') {
+            steps {
+                script {
+                    echo "Verifying Smart Agent installation on target hosts"
+                    
+                    withCredentials([
+                        sshUserPrivateKey(credentialsId: 'ssh-private-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USERNAME')
+                    ]) {
+                        def hosts = env.TARGET_HOSTS.split('\n').collect { it.trim() }.findAll { it }
+                        
+                        hosts.each { host ->
+                            echo "Checking Smart Agent on ${host}"
+                            sh """
+                                ssh -i \${SSH_KEY_FILE} \\
+                                    -p ${params.SSH_PORT} \\
+                                    -o StrictHostKeyChecking=no \\
+                                    ${env.SSH_USERNAME}@${host} \\
+                                    'if [ ! -f ${params.REMOTE_INSTALL_DIR}/smartagentctl ]; then \\
+                                        echo "ERROR: Smart Agent not found at ${params.REMOTE_INSTALL_DIR}"; \\
+                                        exit 1; \\
+                                    fi && \\
+                                    echo "Smart Agent found"'
+                            """
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Install Database Agent') {
+            steps {
+                script {
+                    echo "Installing Database Agent on all hosts"
+                    
+                    withCredentials([
+                        sshUserPrivateKey(credentialsId: 'ssh-private-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USERNAME')
+                    ]) {
+                        def hosts = env.TARGET_HOSTS.split('\n').collect { it.trim() }.findAll { it }
+                        
+                        hosts.each { host ->
+                            echo "Installing Database Agent on ${host}"
+                            
+                            // Build the install command based on parameters
+                            def installCmd = "sudo ./smartagentctl install db"
+                            
+                            // Add download protocol specific options
+                            if (params.DOWNLOAD_PROTOCOL == 'local') {
+                                installCmd += " --download_uri ${params.DOWNLOAD_URI} --download_protocol local"
+                            } else if (params.DOWNLOAD_PROTOCOL == 'http') {
+                                installCmd += " --download_uri ${params.DOWNLOAD_URI} --download_protocol http"
+                            }
+                            
+                            // Add optional agent name
+                            if (params.DB_AGENT_NAME) {
+                                installCmd += " --agent-name ${params.DB_AGENT_NAME}"
+                            }
+                            
+                            // Add database configuration
+                            installCmd += " --db-host ${params.DB_HOST}"
+                            installCmd += " --db-port ${params.DB_PORT}"
+                            installCmd += " --db-type ${params.DB_TYPE}"
+                            installCmd += " --db-username ${params.DB_USERNAME}"
+                            installCmd += " --db-password '${params.DB_PASSWORD}'"
+                            
+                            if (params.DB_NAME) {
+                                installCmd += " --db-name ${params.DB_NAME}"
+                            }
+                            
+                            // Add user and group
+                            installCmd += " --user ${params.APPD_USER} --group ${params.APPD_GROUP}"
+                            
+                            sh """
+                                ssh -i \${SSH_KEY_FILE} \\
+                                    -p ${params.SSH_PORT} \\
+                                    -o StrictHostKeyChecking=no \\
+                                    ${env.SSH_USERNAME}@${host} \\
+                                    'cd ${params.REMOTE_INSTALL_DIR} && ${installCmd}'
+                            """
+                            
+                            echo "Successfully installed Database Agent on ${host}"
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Verify Database Agent Installation') {
+            steps {
+                script {
+                    echo "Verifying Database Agent installation"
+                    
+                    withCredentials([
+                        sshUserPrivateKey(credentialsId: 'ssh-private-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USERNAME')
+                    ]) {
+                        def hosts = env.TARGET_HOSTS.split('\n').collect { it.trim() }.findAll { it }
+                        
+                        hosts.each { host ->
+                            echo "Checking Database Agent status on ${host}"
+                            sh """
+                                ssh -i \${SSH_KEY_FILE} \\
+                                    -p ${params.SSH_PORT} \\
+                                    -o StrictHostKeyChecking=no \\
+                                    ${env.SSH_USERNAME}@${host} \\
+                                    'cd ${params.REMOTE_INSTALL_DIR} && sudo ./smartagentctl status'
+                            """
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo "Database Agent successfully installed on all hosts"
+        }
+        failure {
+            echo "Database Agent installation failed on some hosts. Check logs for details."
+        }
+    }
+}

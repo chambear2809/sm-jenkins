@@ -1,0 +1,149 @@
+pipeline {
+    agent { label 'linux' }
+    
+    parameters {
+        string(name: 'REMOTE_INSTALL_DIR', defaultValue: '/opt/appdynamics/appdsmartagent', description: 'Remote directory where Smart Agent is installed')
+        string(name: 'SSH_PORT', defaultValue: '22', description: 'SSH port for remote hosts')
+        string(name: 'APPD_USER', defaultValue: 'ubuntu', description: 'User to run Machine Agent process')
+        string(name: 'APPD_GROUP', defaultValue: 'ubuntu', description: 'Group to run Machine Agent process')
+        string(name: 'MACHINE_AGENT_NAME', defaultValue: 'machine-agent', description: 'Name for the Machine Agent')
+        string(name: 'TIER_NAME', defaultValue: '', description: 'Tier name for the Machine Agent (optional)')
+        string(name: 'NODE_NAME', defaultValue: '', description: 'Node name for the Machine Agent (optional)')
+        choice(name: 'DOWNLOAD_PROTOCOL', choices: ['download_portal', 'local', 'http'], description: 'Download protocol for agent')
+        string(name: 'DOWNLOAD_URI', defaultValue: '', description: 'Download URI (required if using local or http protocol)')
+    }
+    
+    stages {
+        stage('Preparation') {
+            steps {
+                script {
+                    withCredentials([string(credentialsId: 'deployment-hosts', variable: 'HOSTS_LIST')]) {
+                        def hostsList = HOSTS_LIST.replaceAll(',', '\n').split('\n').collect { it.trim() }.findAll { it }
+                        env.TARGET_HOSTS = hostsList.join('\n')
+                        echo "Preparing Machine Agent installation on ${hostsList.size()} hosts: ${hostsList.join(', ')}"
+                    }
+                    
+                    // Validate download URI if not using download portal
+                    if (params.DOWNLOAD_PROTOCOL != 'download_portal' && !params.DOWNLOAD_URI) {
+                        error("DOWNLOAD_URI is required when using '${params.DOWNLOAD_PROTOCOL}' protocol")
+                    }
+                }
+            }
+        }
+        
+        stage('Verify Smart Agent') {
+            steps {
+                script {
+                    echo "Verifying Smart Agent installation on target hosts"
+                    
+                    withCredentials([
+                        sshUserPrivateKey(credentialsId: 'ssh-private-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USERNAME')
+                    ]) {
+                        def hosts = env.TARGET_HOSTS.split('\n').collect { it.trim() }.findAll { it }
+                        
+                        hosts.each { host ->
+                            echo "Checking Smart Agent on ${host}"
+                            sh """
+                                ssh -i \${SSH_KEY_FILE} \\
+                                    -p ${params.SSH_PORT} \\
+                                    -o StrictHostKeyChecking=no \\
+                                    ${env.SSH_USERNAME}@${host} \\
+                                    'if [ ! -f ${params.REMOTE_INSTALL_DIR}/smartagentctl ]; then \\
+                                        echo "ERROR: Smart Agent not found at ${params.REMOTE_INSTALL_DIR}"; \\
+                                        exit 1; \\
+                                    fi && \\
+                                    echo "Smart Agent found"'
+                            """
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Install Machine Agent') {
+            steps {
+                script {
+                    echo "Installing Machine Agent on all hosts"
+                    
+                    withCredentials([
+                        sshUserPrivateKey(credentialsId: 'ssh-private-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USERNAME')
+                    ]) {
+                        def hosts = env.TARGET_HOSTS.split('\n').collect { it.trim() }.findAll { it }
+                        
+                        hosts.each { host ->
+                            echo "Installing Machine Agent on ${host}"
+                            
+                            // Build the install command based on parameters
+                            def installCmd = "sudo ./smartagentctl install machine"
+                            
+                            // Add download protocol specific options
+                            if (params.DOWNLOAD_PROTOCOL == 'local') {
+                                installCmd += " --download_uri ${params.DOWNLOAD_URI} --download_protocol local"
+                            } else if (params.DOWNLOAD_PROTOCOL == 'http') {
+                                installCmd += " --download_uri ${params.DOWNLOAD_URI} --download_protocol http"
+                            }
+                            
+                            // Add optional configuration
+                            if (params.MACHINE_AGENT_NAME) {
+                                installCmd += " --agent-name ${params.MACHINE_AGENT_NAME}"
+                            }
+                            if (params.TIER_NAME) {
+                                installCmd += " --tier-name ${params.TIER_NAME}"
+                            }
+                            if (params.NODE_NAME) {
+                                installCmd += " --node-name ${params.NODE_NAME}"
+                            }
+                            
+                            // Add user and group
+                            installCmd += " --user ${params.APPD_USER} --group ${params.APPD_GROUP}"
+                            
+                            sh """
+                                ssh -i \${SSH_KEY_FILE} \\
+                                    -p ${params.SSH_PORT} \\
+                                    -o StrictHostKeyChecking=no \\
+                                    ${env.SSH_USERNAME}@${host} \\
+                                    'cd ${params.REMOTE_INSTALL_DIR} && ${installCmd}'
+                            """
+                            
+                            echo "Successfully installed Machine Agent on ${host}"
+                        }
+                    }
+                }
+            }
+        }
+        
+        stage('Verify Machine Agent Installation') {
+            steps {
+                script {
+                    echo "Verifying Machine Agent installation"
+                    
+                    withCredentials([
+                        sshUserPrivateKey(credentialsId: 'ssh-private-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USERNAME')
+                    ]) {
+                        def hosts = env.TARGET_HOSTS.split('\n').collect { it.trim() }.findAll { it }
+                        
+                        hosts.each { host ->
+                            echo "Checking Machine Agent status on ${host}"
+                            sh """
+                                ssh -i \${SSH_KEY_FILE} \\
+                                    -p ${params.SSH_PORT} \\
+                                    -o StrictHostKeyChecking=no \\
+                                    ${env.SSH_USERNAME}@${host} \\
+                                    'cd ${params.REMOTE_INSTALL_DIR} && sudo ./smartagentctl status'
+                            """
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        success {
+            echo "Machine Agent successfully installed on all hosts"
+        }
+        failure {
+            echo "Machine Agent installation failed on some hosts. Check logs for details."
+        }
+    }
+}

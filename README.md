@@ -8,7 +8,7 @@ Automated deployment and lifecycle management of AppDynamics Smart Agent across 
 
 ## 🎯 Overview
 
-This lab demonstrates how to use Jenkins to manage AppDynamics Smart Agent across multiple Ubuntu EC2 instances within a single AWS VPC. The project includes 2 parameterized pipelines covering the complete Smart Agent lifecycle.
+This lab demonstrates how to use Jenkins to manage AppDynamics Smart Agent across multiple Ubuntu EC2 instances within a single AWS VPC. The project includes 4 parameterized pipelines covering the complete Smart Agent lifecycle, including installation of Machine and Database agents.
 
 **Key Features:**
 - 🚀 **Parallel Deployment** - Deploy to multiple hosts simultaneously
@@ -109,7 +109,7 @@ For each Jenkinsfile in the `pipelines/` directory:
    - Script Path: `pipelines/Jenkinsfile.deploy`
 6. Save
 
-Repeat for the second pipeline (Jenkinsfile.cleanup).
+Repeat for all pipelines (Jenkinsfile.install-machine-agent, Jenkinsfile.install-db-agent, Jenkinsfile.cleanup).
 
 ### 6️⃣ Deploy!
 
@@ -132,12 +132,18 @@ java -jar jenkins-cli.jar -s http://your-jenkins:8080/ build "Deploy-Smart-Agent
 |----------|-------------|------|
 | **01. Deploy Smart Agent** | Installs Smart Agent and starts service | `Jenkinsfile.deploy` |
 
+### Agent Installation (2 pipelines)
+| Pipeline | Description | File |
+|----------|-------------|------|
+| **02. Install Machine Agent** | Installs Machine Agent via smartagentctl | `Jenkinsfile.install-machine-agent` |
+| **03. Install Database Agent** | Installs Database Agent via smartagentctl | `Jenkinsfile.install-db-agent` |
+
 ### Smart Agent Management (1 pipeline)
 | Pipeline | Description | File |
 |----------|-------------|------|
-| **02. Cleanup All Agents** | Deletes /opt/appdynamics directory | `Jenkinsfile.cleanup` |
+| **04. Cleanup All Agents** | Deletes /opt/appdynamics directory | `Jenkinsfile.cleanup` |
 
-**Total: 2 pipelines** - All support configurable batch sizes (default: 256)
+**Total: 4 pipelines** - All support configurable batch sizes (default: 256)
 
 ## 🛠️ How It Works
 
