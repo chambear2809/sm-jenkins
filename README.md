@@ -69,18 +69,36 @@ Navigate to: **Manage Jenkins → Credentials → System → Global credentials*
   - ID: `account-access-key`
   - Secret: Your AppDynamics account access key
 
+- **DB_MONITOR_PASSWORD** (Secret text)
+  - Kind: Secret text
+  - ID: `db-monitor-password`
+  - Secret: Database monitoring password for the Database Agent pipeline
+
+- **SF_API_TOKEN** (Secret text)
+  - Kind: Secret text
+  - ID: `sf-api-token`
+  - Secret: Token sent as `X-SF-Token` for Client Inventory API checks
+
 ### 3️⃣ Configure Jenkins Parameters
 
-Each pipeline accepts these parameters:
-- `BATCH_SIZE` - Number of hosts per batch (default: 256)
-- `SSH_USER` - SSH username (default: ubuntu)
-- `SMARTAGENT_USER` - User for Smart Agent service (optional)
-- `SMARTAGENT_GROUP` - Group for Smart Agent service (optional)
+All pipelines accept these shared parameters:
+- `BATCH_SIZE` - Number of hosts processed in parallel per batch (default: 25, max: 256)
+- `REMOTE_INSTALL_DIR` - Smart Agent directory on target hosts (must stay under `/opt/appdynamics/`)
+- `SSH_PORT` - SSH port (default: 22)
+- `API_CHECK_ENABLED` - Run the Client Inventory API check after the host summary (default: true)
+- `API_BASE_URL` - Client Inventory API base URL (default: `https://fso-tme.saas.appdynamics.com/fm-service/v1`)
+- `API_TOKEN_CREDENTIAL_ID` - Secret Text credential for `X-SF-Token` (default: `sf-api-token`)
+
+Deploy and install pipelines also accept:
+- `APPD_USER` - User for Smart Agent or installed agent service (default: ubuntu)
+- `APPD_GROUP` - Group for Smart Agent or installed agent service (default: ubuntu)
+
+The SSH username comes from the `ssh-private-key` credential. There is no separate `SSH_USER` build parameter.
 
 
 ### 4️⃣ Place Smart Agent ZIP in Repository
 
-The Smart Agent ZIP file must be in the repository root before building the Jenkins container:
+The deploy pipeline defaults to `SMARTAGENT_ZIP_PATH=appdsmartagent_64_linux_25.10.0.497.zip`, resolved relative to the Jenkins agent workspace. Keep the ZIP in the repository checkout, or override `SMARTAGENT_ZIP_PATH` with an absolute path available on the Jenkins agent.
 
 ```bash
 # Download Smart Agent to repository root
@@ -91,8 +109,7 @@ curl -o appdsmartagent_64_linux_25.10.0.497.zip "https://download.appdynamics.co
 ls -lh appdsmartagent_64_linux_25.10.0.497.zip
 ```
 
-**Note**: The Dockerfile copies this ZIP into the Jenkins container at `/var/jenkins_home/smartagent/appdsmartagent.zip` during build.
-```
+**Note**: The Dockerfile also copies this ZIP into the Jenkins controller container at `/var/jenkins_home/smartagent/appdsmartagent.zip`. Use that absolute path only when the pipeline runs on the controller or on an agent with the same mounted path. Jenkins plugins are installed from the tracked `plugins.txt` file. The Docker image does not bake in an admin password; complete the Jenkins first-run setup when the container starts.
 
 ### 5️⃣ Create Jenkins Pipelines
 
@@ -106,7 +123,7 @@ For each Jenkinsfile in the `pipelines/` directory:
    - Definition: Pipeline script from SCM
    - SCM: Git
    - Repository URL: Your repository URL
-   - Script Path: `pipelines/Jenkinsfile.deploy`
+   - Script Path: matching Jenkinsfile path, such as `pipelines/Jenkinsfile.deploy`
 6. Save
 
 Repeat for all pipelines (Jenkinsfile.install-machine-agent, Jenkinsfile.install-db-agent, Jenkinsfile.cleanup).
@@ -122,7 +139,7 @@ Repeat for all pipelines (Jenkinsfile.install-machine-agent, Jenkinsfile.install
 **Via Jenkins CLI:**
 ```bash
 java -jar jenkins-cli.jar -s http://your-jenkins:8080/ build "Deploy-Smart-Agent" \
-  -p BATCH_SIZE=128
+  -p BATCH_SIZE=25
 ```
 
 ## 📋 Available Pipelines
@@ -141,9 +158,9 @@ java -jar jenkins-cli.jar -s http://your-jenkins:8080/ build "Deploy-Smart-Agent
 ### Smart Agent Management (1 pipeline)
 | Pipeline | Description | File |
 |----------|-------------|------|
-| **04. Cleanup All Agents** | Deletes /opt/appdynamics directory | `Jenkinsfile.cleanup` |
+| **04. Cleanup All Agents** | Deletes the validated `REMOTE_INSTALL_DIR` | `Jenkinsfile.cleanup` |
 
-**Total: 4 pipelines** - All support configurable batch sizes (default: 256)
+**Total: 4 pipelines** - All support configurable batch sizes (default: 25, max: 256)
 
 ## 🛠️ How It Works
 
@@ -154,6 +171,7 @@ java -jar jenkins-cli.jar -s http://your-jenkins:8080/ build "Deploy-Smart-Agent
 5. **Parallel Execution** - Pipeline SSHs into each target host simultaneously within batch
 6. **Commands Execute** - Install/uninstall/stop/clean operations run on each host
 7. **Results Reported** - Success/failure status displayed in Jenkins console
+8. **API Checked** - Pipelines validate `openapi.json` and call `GET /clients` with `X-SF-Token`
 
 ## 🔐 Security
 
@@ -162,27 +180,41 @@ java -jar jenkins-cli.jar -s http://your-jenkins:8080/ build "Deploy-Smart-Agent
 - **No Public Access** - Target hosts don't need public IPs
 - **Security Group** - Restricts SSH access to Jenkins agent only
 - **Credentials Binding** - Secrets never exposed in logs
+- **Path Guardrails** - Destructive operations are limited to validated `/opt/appdynamics/...` paths
+- **SSH Host Keys** - Pipelines use `StrictHostKeyChecking=accept-new` with workspace known-host files
+- **API Token Isolation** - Client Inventory API checks use the dedicated `sf-api-token` credential
+
+## 🔎 Client Inventory API Check
+
+The repo tracks `openapi.json` for the Client Inventory API. All four pipelines run `scripts/check-client-inventory-api.sh` after their host summary when `API_CHECK_ENABLED=true`.
+
+The check verifies:
+- `openapi.json` is present and defines `/clients`
+- `GET ${API_BASE_URL}/clients?limit=1&offset=0&include_health=false` returns HTTP 2xx
+- the response body looks like JSON
+
+Cleanup only checks API reachability and authentication. It does not assert that removed hosts disappear from inventory, because inventory retention timing is API-side behavior.
 
 ## 📈 Scaling
 
 All pipelines use automatic batching to support any number of hosts:
 
 ### How It Works
-- **Automatic batching** - Splits hosts into groups (configurable, default: 256)
+- **Automatic batching** - Splits hosts into groups (configurable, default: 25, max: 256)
 - **Sequential batch processing** - Avoids overwhelming runner resources
-- **Parallel within batch** - Each batch processes all hosts simultaneously
+- **Parallel within batch** - Each batch processes all hosts simultaneously through Jenkins `parallel`
 - **Works at any scale** - 1 host to thousands
 
 ### Batching Strategy
 1. Splits your host list into manageable batches
 2. Processes each batch sequentially
-3. Deploys to all hosts within each batch in parallel using background processes
+3. Deploys to all hosts within each batch in parallel using Jenkins `parallel`
 
 **Examples:**
 - **10 hosts** = 1 batch, all deploy in parallel
-- **500 hosts** = 2 batches × 256 hosts
-- **1,000 hosts** = 4 batches × 256 hosts
-- **5,000 hosts** = 20 batches × 256 hosts
+- **100 hosts** = 4 batches × 25 hosts
+- **500 hosts** = 20 batches × 25 hosts
+- **1,000 hosts** = 40 batches × 25 hosts
 
 ## 🎨 Jenkins Pipeline Features
 
