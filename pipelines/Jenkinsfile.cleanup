@@ -1,111 +1,319 @@
 pipeline {
     agent { label 'linux' }
-    
+
     parameters {
+        string(name: 'BATCH_SIZE', defaultValue: '25', description: 'Number of hosts to process in parallel per batch (1-256)')
         string(name: 'REMOTE_INSTALL_DIR', defaultValue: '/opt/appdynamics/appdsmartagent', description: 'Remote directory where Smart Agent is installed')
         string(name: 'SSH_PORT', defaultValue: '22', description: 'SSH port for remote hosts')
         booleanParam(name: 'CONFIRM_CLEANUP', defaultValue: false, description: 'Check this box to confirm you want to remove Smart Agent from all hosts')
+        booleanParam(name: 'API_CHECK_ENABLED', defaultValue: true, description: 'Check Client Inventory API after pipeline host summary')
+        string(name: 'API_BASE_URL', defaultValue: 'https://fso-tme.saas.appdynamics.com/fm-service/v1', description: 'Client Inventory API base URL')
+        string(name: 'API_TOKEN_CREDENTIAL_ID', defaultValue: 'sf-api-token', description: 'Secret Text credential ID for the X-SF-Token API token')
     }
-    
+
+    environment {
+        STAGING_DIR = "${WORKSPACE}/smartagent-cleanup"
+        RESULTS_DIR = "${WORKSPACE}/smartagent-cleanup/results"
+    }
+
     stages {
         stage('Validate') {
             steps {
                 script {
                     if (!params.CONFIRM_CLEANUP) {
-                        error("Cleanup not confirmed. Please check the CONFIRM_CLEANUP parameter to proceed.")
+                        error('Cleanup not confirmed. Please check the CONFIRM_CLEANUP parameter to proceed.')
                     }
-                    
+
+                    validateCleanupParams()
+
                     withCredentials([string(credentialsId: 'deployment-hosts', variable: 'HOSTS_LIST')]) {
-                        def hostsList = HOSTS_LIST.replaceAll(',', '\n').split('\n').collect { it.trim() }.findAll { it }
+                        def hostsList = parseHosts(HOSTS_LIST)
                         env.TARGET_HOSTS = hostsList.join('\n')
-                        echo "Preparing to clean up Smart Agent from ${hostsList.size()} hosts: ${hostsList.join(', ')}"
+                        echo "Preparing to clean up Smart Agent from ${hostsList.size()} hosts in batches of ${batchSize()}: ${hostsList.join(', ')}"
                     }
+
+                    sh """
+                        rm -rf ${shellQuote(env.STAGING_DIR)}
+                        mkdir -p ${shellQuote(env.RESULTS_DIR)}
+                    """
                 }
             }
         }
-        
+
         stage('Stop Smart Agent') {
             steps {
                 script {
                     withCredentials([
                         sshUserPrivateKey(credentialsId: 'ssh-private-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USERNAME')
                     ]) {
-                        def hosts = env.TARGET_HOSTS.split('\n').collect { it.trim() }.findAll { it }
-                        
-                        hosts.each { host ->
-                            echo "Stopping Smart Agent on ${host}"
-                            
-                            sh """
-                                ssh -i \${SSH_KEY_FILE} \
-                                    -p ${params.SSH_PORT} \
-                                    -o StrictHostKeyChecking=no \
-                                    ${env.SSH_USERNAME}@${host} \
-                                    'cd ${params.REMOTE_INSTALL_DIR} && sudo ./smartagentctl stop --service' || true
-                            """
+                        runBatches(targetHosts(), batchSize(), 'Stop Smart Agent') { host ->
+                            withHostResult(host) {
+                                stopSmartAgentOnHost(host, env.SSH_USERNAME, env.SSH_KEY_FILE)
+                            }
                         }
                     }
                 }
             }
         }
-        
+
         stage('Remove Smart Agent') {
             steps {
                 script {
                     withCredentials([
                         sshUserPrivateKey(credentialsId: 'ssh-private-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USERNAME')
                     ]) {
-                        def hosts = env.TARGET_HOSTS.split('\n').collect { it.trim() }.findAll { it }
-                        
-                        hosts.each { host ->
-                            echo "Removing Smart Agent from ${host}"
-                            
-                            sh """
-                                ssh -i \${SSH_KEY_FILE} \
-                                    -p ${params.SSH_PORT} \
-                                    -o StrictHostKeyChecking=no \
-                                    ${env.SSH_USERNAME}@${host} \
-                                    'sudo rm -rf ${params.REMOTE_INSTALL_DIR}'
-                            """
-                            
-                            echo "Successfully removed Smart Agent from ${host}"
+                        runBatches(targetHosts(), batchSize(), 'Remove Smart Agent') { host ->
+                            withHostResult(host) {
+                                removeSmartAgentFromHost(host, env.SSH_USERNAME, env.SSH_KEY_FILE)
+                            }
                         }
                     }
                 }
             }
         }
-        
+
         stage('Verify Cleanup') {
             steps {
                 script {
                     withCredentials([
                         sshUserPrivateKey(credentialsId: 'ssh-private-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USERNAME')
                     ]) {
-                        def hosts = env.TARGET_HOSTS.split('\n').collect { it.trim() }.findAll { it }
-                        
-                        hosts.each { host ->
-                            echo "Verifying cleanup on ${host}"
-                            
-                            sh """
-                                ssh -i \${SSH_KEY_FILE} \
-                                    -p ${params.SSH_PORT} \
-                                    -o StrictHostKeyChecking=no \
-                                    ${env.SSH_USERNAME}@${host} \
-                                    'test ! -d ${params.REMOTE_INSTALL_DIR} && echo "Smart Agent removed successfully" || echo "WARNING: Directory still exists"'
-                            """
+                        runBatches(targetHosts(), batchSize(), 'Verify Cleanup') { host ->
+                            withHostResult(host) {
+                                verifyCleanupOnHost(host, env.SSH_USERNAME, env.SSH_KEY_FILE)
+                            }
                         }
                     }
                 }
             }
         }
+
+        stage('Summary') {
+            steps {
+                script {
+                    summarizeHostResults(targetHosts(), 'Smart Agent cleanup')
+                }
+            }
+        }
+
+        stage('Check Client Inventory API') {
+            when {
+                expression { return params.API_CHECK_ENABLED }
+            }
+            steps {
+                script {
+                    runClientInventoryApiCheck()
+                }
+            }
+        }
     }
-    
+
     post {
         success {
             echo "Smart Agent successfully removed from all hosts"
         }
         failure {
-            echo "Smart Agent cleanup failed on some hosts. Check logs for details."
+            echo "Smart Agent cleanup failed. Check host result summary for details."
+        }
+        always {
+            sh "rm -rf ${shellQuote(env.STAGING_DIR)}"
         }
     }
 }
 
+def stopSmartAgentOnHost(String host, String sshUsername, String sshKeyFile) {
+    def remoteDir = params.REMOTE_INSTALL_DIR.trim()
+    def ssh = sshCommand(sshKeyFile, params.SSH_PORT.trim(), knownHostsFile(host), sshUsername, host)
+    def command = """
+        if [ -d ${shellQuote(remoteDir)} ]; then
+            cd ${shellQuote(remoteDir)} && sudo ./smartagentctl stop --service || true
+        else
+            echo "Smart Agent directory does not exist"
+        fi
+    """.stripIndent().trim()
+    sh "${ssh} ${shellQuote(command)}"
+}
+
+def removeSmartAgentFromHost(String host, String sshUsername, String sshKeyFile) {
+    def remoteDir = params.REMOTE_INSTALL_DIR.trim()
+    def ssh = sshCommand(sshKeyFile, params.SSH_PORT.trim(), knownHostsFile(host), sshUsername, host)
+    sh "${ssh} ${shellQuote("sudo rm -rf ${shellQuote(remoteDir)}")}"
+}
+
+def verifyCleanupOnHost(String host, String sshUsername, String sshKeyFile) {
+    def remoteDir = params.REMOTE_INSTALL_DIR.trim()
+    def ssh = sshCommand(sshKeyFile, params.SSH_PORT.trim(), knownHostsFile(host), sshUsername, host)
+    sh "${ssh} ${shellQuote("test ! -d ${shellQuote(remoteDir)}")}"
+}
+
+def validateCleanupParams() {
+    validateBatchSize(params.BATCH_SIZE)
+    validatePort(params.SSH_PORT)
+    validateSafeRemoteInstallDir(params.REMOTE_INSTALL_DIR)
+}
+
+def runClientInventoryApiCheck() {
+    validateApiCheckParams()
+    withCredentials([string(credentialsId: params.API_TOKEN_CREDENTIAL_ID.trim(), variable: 'SF_API_TOKEN')]) {
+        sh """
+            set +x
+            API_BASE_URL=${shellQuote(params.API_BASE_URL.trim())} \
+            OPENAPI_SPEC=${shellQuote("${env.WORKSPACE}/openapi.json")} \
+            bash ${shellQuote("${env.WORKSPACE}/scripts/check-client-inventory-api.sh")}
+        """
+    }
+}
+
+def validateApiCheckParams() {
+    validateApiBaseUrl(params.API_BASE_URL, 'API_BASE_URL')
+    validateCredentialId(params.API_TOKEN_CREDENTIAL_ID, 'API_TOKEN_CREDENTIAL_ID')
+    if (!fileExists("${env.WORKSPACE}/openapi.json")) {
+        error('openapi.json not found in Jenkins workspace')
+    }
+    if (!fileExists("${env.WORKSPACE}/scripts/check-client-inventory-api.sh")) {
+        error('scripts/check-client-inventory-api.sh not found in Jenkins workspace')
+    }
+}
+
+def parseHosts(String hostsText) {
+    def hosts = hostsText.replaceAll(',', '\n').split('\n').collect { it.trim() }.findAll { it && !it.startsWith('#') }.unique()
+    if (hosts.isEmpty()) {
+        error('No hosts provided in deployment-hosts credential')
+    }
+    hosts.each { validateHost(it) }
+    return hosts
+}
+
+def targetHosts() {
+    return env.TARGET_HOSTS.split('\n').collect { it.trim() }.findAll { it }
+}
+
+def runBatches(List hosts, int size, String actionName, Closure action) {
+    def batches = hosts.collate(size)
+    batches.eachWithIndex { batch, index ->
+        echo "${actionName} batch ${index + 1}/${batches.size()} (${batch.size()} hosts)"
+        def branches = [:]
+        batch.each { batchHost ->
+            def host = batchHost
+            branches["${actionName} ${host}"] = {
+                action(host)
+            }
+        }
+        parallel branches
+    }
+}
+
+def withHostResult(String host, Closure body) {
+    try {
+        body.call()
+        markHostResult(host, 'SUCCESS', '')
+    } catch (err) {
+        def message = err.getMessage() ?: err.toString()
+        markHostResult(host, 'FAILURE', message)
+        echo "Host ${host} failed: ${message}"
+    }
+}
+
+def markHostResult(String host, String status, String message) {
+    def path = resultFile(host)
+    if (status == 'SUCCESS' && fileExists(path) && readFile(path).startsWith('FAILURE')) {
+        return
+    }
+    writeFile file: path, text: "${status}\n${message}\n"
+}
+
+def summarizeHostResults(List hosts, String operation) {
+    def failed = []
+    hosts.each { host ->
+        def path = resultFile(host)
+        if (!fileExists(path)) {
+            failed << "${host} (no result recorded)"
+        } else {
+            def result = readFile(path)
+            if (!result.startsWith('SUCCESS')) {
+                failed << host
+            }
+        }
+    }
+
+    if (failed) {
+        error("${operation} failed on ${failed.size()} host(s): ${failed.join(', ')}")
+    }
+
+    echo "${operation} succeeded on ${hosts.size()} host(s)"
+}
+
+def resultFile(String host) {
+    return "${env.RESULTS_DIR}/${safeFileToken(host)}.result"
+}
+
+def sshCommand(String keyFile, String port, String knownHosts, String sshUsername, String host) {
+    return "ssh -i ${shellQuote(keyFile)} -p ${shellQuote(port)} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${shellQuote(knownHosts)} -o BatchMode=yes -o ConnectTimeout=10 ${shellQuote("${sshUsername}@${host}")}"
+}
+
+def knownHostsFile(String host) {
+    return "${env.STAGING_DIR}/known_hosts_${safeFileToken(host)}"
+}
+
+def shellQuote(Object value) {
+    def text = value.toString()
+    return "'" + text.replace("'", "'\"'\"'") + "'"
+}
+
+def safeFileToken(String value) {
+    return value.replaceAll(/[^A-Za-z0-9_.-]/, '_')
+}
+
+def batchSize() {
+    return params.BATCH_SIZE.trim().toInteger()
+}
+
+def validateBatchSize(String rawValue) {
+    if (!(rawValue?.trim() ==~ /^[0-9]+$/)) {
+        error('BATCH_SIZE must be a number')
+    }
+    def value = rawValue.trim().toInteger()
+    if (value < 1 || value > 256) {
+        error('BATCH_SIZE must be between 1 and 256')
+    }
+}
+
+def validatePort(String rawValue) {
+    if (!(rawValue?.trim() ==~ /^[0-9]+$/)) {
+        error('SSH_PORT must be a number')
+    }
+    def value = rawValue.trim().toInteger()
+    if (value < 1 || value > 65535) {
+        error('SSH_PORT must be between 1 and 65535')
+    }
+}
+
+def validateHost(String host) {
+    if (!(host ==~ /^[A-Za-z0-9][A-Za-z0-9._:-]*$/) || host.contains('..')) {
+        error("Invalid host entry: ${host}")
+    }
+}
+
+def validateSafeRemoteInstallDir(String rawValue) {
+    def value = rawValue?.trim()
+    if (!value || value == '/' || value == '/opt' || value == '/opt/appdynamics') {
+        error('REMOTE_INSTALL_DIR must be a specific directory under /opt/appdynamics/')
+    }
+    if (!(value ==~ /^\/opt\/appdynamics\/[A-Za-z0-9._\/-]+$/) || value.contains('..') || value.contains('//')) {
+        error('REMOTE_INSTALL_DIR must stay under /opt/appdynamics/ and cannot contain whitespace, shell metacharacters, or traversal')
+    }
+}
+
+def validateCredentialId(String rawValue, String name) {
+    def value = rawValue?.trim()
+    if (!(value ==~ /^[A-Za-z0-9_.:-]+$/)) {
+        error("${name} must be a Jenkins credential ID without whitespace")
+    }
+}
+
+def validateApiBaseUrl(String rawValue, String name) {
+    def value = rawValue?.trim()
+    if (!value || value.contains(' ') || value.contains('\n') || value.contains('\r') || !(value.startsWith('https://') || value.startsWith('http://'))) {
+        error("${name} must be an http:// or https:// URL without whitespace")
+    }
+}

@@ -1,72 +1,84 @@
 pipeline {
     agent { label 'linux' }
-    
+
     parameters {
-        string(name: 'SMARTAGENT_ZIP_PATH', defaultValue: '/var/jenkins_home/smartagent/appdsmartagent.zip', description: 'Path to Smart Agent ZIP file on Jenkins server')
+        string(name: 'BATCH_SIZE', defaultValue: '25', description: 'Number of hosts to process in parallel per batch (1-256)')
+        string(name: 'SMARTAGENT_ZIP_PATH', defaultValue: 'appdsmartagent_64_linux_25.10.0.497.zip', description: 'Smart Agent ZIP path on the Jenkins agent, absolute or relative to workspace')
         string(name: 'REMOTE_INSTALL_DIR', defaultValue: '/opt/appdynamics/appdsmartagent', description: 'Remote directory for Smart Agent installation')
         string(name: 'APPD_USER', defaultValue: 'ubuntu', description: 'User to run Smart Agent process')
         string(name: 'APPD_GROUP', defaultValue: 'ubuntu', description: 'Group to run Smart Agent process')
         string(name: 'SSH_PORT', defaultValue: '22', description: 'SSH port for remote hosts')
         string(name: 'AGENT_NAME', defaultValue: 'smartagent', description: 'Smart Agent name')
-        string(name: 'LOG_LEVEL', defaultValue: 'DEBUG', description: 'Log level (DEBUG, INFO, WARN, ERROR)')
+        choice(name: 'LOG_LEVEL', choices: ['INFO', 'DEBUG', 'WARN', 'ERROR'], description: 'Smart Agent log level')
+        string(name: 'CONTROLLER_URL', defaultValue: 'fso-tme.saas.appdynamics.com', description: 'AppDynamics controller host name')
+        string(name: 'ACCOUNT_NAME', defaultValue: 'fso-tme', description: 'AppDynamics account name')
+        booleanParam(name: 'API_CHECK_ENABLED', defaultValue: true, description: 'Check Client Inventory API after pipeline host summary')
+        string(name: 'API_BASE_URL', defaultValue: 'https://fso-tme.saas.appdynamics.com/fm-service/v1', description: 'Client Inventory API base URL')
+        string(name: 'API_TOKEN_CREDENTIAL_ID', defaultValue: 'sf-api-token', description: 'Secret Text credential ID for the X-SF-Token API token')
     }
-    
+
     environment {
         STAGING_DIR = "${WORKSPACE}/smartagent-deploy"
-        EXTRACT_DIR = "${STAGING_DIR}/appdsmartagent"
+        EXTRACT_DIR = "${WORKSPACE}/smartagent-deploy/appdsmartagent"
+        RESULTS_DIR = "${WORKSPACE}/smartagent-deploy/results"
     }
-    
+
     stages {
         stage('Preparation') {
             steps {
                 script {
+                    validateDeployParams()
+
                     withCredentials([string(credentialsId: 'deployment-hosts', variable: 'HOSTS_LIST')]) {
-                        def hostsList = HOSTS_LIST.replaceAll(',', '\n').split('\n').collect { it.trim() }.findAll { it }
+                        def hostsList = parseHosts(HOSTS_LIST)
                         env.TARGET_HOSTS = hostsList.join('\n')
-                        echo "Preparing Smart Agent deployment to ${hostsList.size()} hosts: ${hostsList.join(', ')}"
+                        echo "Preparing Smart Agent deployment to ${hostsList.size()} hosts in batches of ${batchSize()}: ${hostsList.join(', ')}"
                     }
-                    
+
                     sh """
-                        rm -rf ${STAGING_DIR}
-                        mkdir -p ${STAGING_DIR}
+                        rm -rf ${shellQuote(env.STAGING_DIR)}
+                        mkdir -p ${shellQuote(env.RESULTS_DIR)}
                     """
                 }
             }
         }
-        
+
         stage('Extract Smart Agent') {
             steps {
                 script {
                     echo "Extracting Smart Agent from ${params.SMARTAGENT_ZIP_PATH}"
-                    
+                    def smartAgentZip = resolveLocalPath(params.SMARTAGENT_ZIP_PATH)
+                    if (!fileExists(smartAgentZip)) {
+                        error("Smart Agent ZIP not found on Jenkins agent: ${smartAgentZip}")
+                    }
+
                     sh """
-                        cd ${STAGING_DIR}
-                        unzip -q ${params.SMARTAGENT_ZIP_PATH} -d appdsmartagent
-                        chmod +x ${EXTRACT_DIR}/smartagentctl
+                        cd ${shellQuote(env.STAGING_DIR)}
+                        unzip -q ${shellQuote(smartAgentZip)} -d appdsmartagent
+                        chmod +x ${shellQuote("${env.EXTRACT_DIR}/smartagentctl")}
                     """
                 }
             }
         }
-        
+
         stage('Configure Smart Agent') {
             steps {
                 script {
-                    echo "Creating config.ini template"
-                    
                     def configIni = generateConfigIni(
                         'PLACEHOLDER_ACCESS_KEY',
-                        params.AGENT_NAME,
+                        params.AGENT_NAME.trim(),
                         params.LOG_LEVEL,
-                        params.REMOTE_INSTALL_DIR
+                        params.REMOTE_INSTALL_DIR.trim(),
+                        params.CONTROLLER_URL.trim(),
+                        params.ACCOUNT_NAME.trim()
                     )
-                    
-                    writeFile file: "${EXTRACT_DIR}/config.ini", text: configIni
-                    
-                    echo "config.ini template created (access key will be replaced on each host)"
+
+                    writeFile file: "${env.EXTRACT_DIR}/config.ini", text: configIni
+                    echo "config.ini template created; account access key will be inserted per host without logging it"
                 }
             }
         }
-        
+
         stage('Deploy to Remote Hosts') {
             steps {
                 script {
@@ -74,113 +86,366 @@ pipeline {
                         sshUserPrivateKey(credentialsId: 'ssh-private-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USERNAME'),
                         string(credentialsId: 'account-access-key', variable: 'ACCOUNT_ACCESS_KEY')
                     ]) {
-                        def hosts = env.TARGET_HOSTS.split('\n').collect { it.trim() }.findAll { it }
-                        
-                        hosts.each { host ->
-                            echo "Deploying Smart Agent to ${host}"
-                            
-                            // Stop any existing Smart Agent and prepare directory
-                            sh """
-                                ssh -i \${SSH_KEY_FILE} \
-                                    -p ${params.SSH_PORT} \
-                                    -o StrictHostKeyChecking=no \
-                                    ${env.SSH_USERNAME}@${host} \
-                                    'if [ -d ${params.REMOTE_INSTALL_DIR} ]; then \
-                                       cd ${params.REMOTE_INSTALL_DIR} && sudo ./smartagentctl stop --service 2>/dev/null || true; \
-                                     fi && \
-                                     sudo rm -rf ${params.REMOTE_INSTALL_DIR} && \
-                                     sudo mkdir -p ${params.REMOTE_INSTALL_DIR} && \
-                                     sudo chown ${env.SSH_USERNAME}:${env.SSH_USERNAME} ${params.REMOTE_INSTALL_DIR}'
-                            """
-                            
-                            // Copy Smart Agent files
-                            sh """
-                                scp -i \${SSH_KEY_FILE} \
-                                    -P ${params.SSH_PORT} \
-                                    -o StrictHostKeyChecking=no \
-                                    -r ${EXTRACT_DIR}/* \
-                                    ${env.SSH_USERNAME}@${host}:${params.REMOTE_INSTALL_DIR}/
-                            """
-                            
-                            // Update config.ini with actual access key on remote host
-                            sh """
-                                ssh -i \${SSH_KEY_FILE} \
-                                    -p ${params.SSH_PORT} \
-                                    -o StrictHostKeyChecking=no \
-                                    ${env.SSH_USERNAME}@${host} \
-                                    "sed -i 's/PLACEHOLDER_ACCESS_KEY/${ACCOUNT_ACCESS_KEY}/g' ${params.REMOTE_INSTALL_DIR}/config.ini"
-                            """
-                            
-                            // Start Smart Agent
-                            sh """
-                                ssh -i \${SSH_KEY_FILE} \
-                                    -p ${params.SSH_PORT} \
-                                    -o StrictHostKeyChecking=no \
-                                    ${env.SSH_USERNAME}@${host} \
-                                    'cd ${params.REMOTE_INSTALL_DIR} && \
-                                     sudo ./smartagentctl start --enable-auto-attach --service \
-                                     --user ${params.APPD_USER} --group ${params.APPD_GROUP}'
-                            """
-                            
-                            echo "Successfully deployed to ${host}"
+                        def hosts = targetHosts()
+
+                        runBatches(hosts, batchSize(), 'Deploy') { host ->
+                            withHostResult(host) {
+                                deploySmartAgentToHost(host, env.SSH_USERNAME, env.SSH_KEY_FILE)
+                            }
                         }
                     }
                 }
             }
         }
-        
+
         stage('Verify Installation') {
             steps {
                 script {
-                    echo "Verifying Smart Agent installation"
-                    
                     withCredentials([
                         sshUserPrivateKey(credentialsId: 'ssh-private-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USERNAME')
                     ]) {
-                        def hosts = env.TARGET_HOSTS.split('\n').collect { it.trim() }.findAll { it }
-                        
-                        hosts.each { host ->
-                            echo "Checking Smart Agent status on ${host}"
-                            sh """
-                                ssh -i \${SSH_KEY_FILE} \
-                                    -p ${params.SSH_PORT} \
-                                    -o StrictHostKeyChecking=no \
-                                    ${env.SSH_USERNAME}@${host} \
-                                    'cd ${params.REMOTE_INSTALL_DIR} && sudo ./smartagentctl status'
-                            """
+                        runBatches(targetHosts(), batchSize(), 'Verify') { host ->
+                            withHostResult(host) {
+                                verifySmartAgentOnHost(host, env.SSH_USERNAME, env.SSH_KEY_FILE)
+                            }
                         }
                     }
+                }
+            }
+        }
+
+        stage('Summary') {
+            steps {
+                script {
+                    summarizeHostResults(targetHosts(), 'Smart Agent deployment')
+                }
+            }
+        }
+
+        stage('Check Client Inventory API') {
+            when {
+                expression { return params.API_CHECK_ENABLED }
+            }
+            steps {
+                script {
+                    runClientInventoryApiCheck()
                 }
             }
         }
     }
-    
+
     post {
         success {
             echo "Smart Agent successfully deployed to all hosts"
         }
         failure {
-            echo "Smart Agent deployment failed. Check logs for details."
+            echo "Smart Agent deployment failed. Check host result summary for details."
         }
         always {
-            sh "rm -rf ${STAGING_DIR}"
+            sh "rm -rf ${shellQuote(env.STAGING_DIR)}"
         }
     }
 }
 
-def generateConfigIni(accessKey, agentName, logLevel, remoteDir) {
-    return """ControllerURL    = fso-tme.saas.appdynamics.com
+def deploySmartAgentToHost(String host, String sshUsername, String sshKeyFile) {
+    def remoteDir = params.REMOTE_INSTALL_DIR.trim()
+    def knownHosts = knownHostsFile(host)
+    def ssh = sshCommand(sshKeyFile, params.SSH_PORT.trim(), knownHosts, sshUsername, host)
+    def scp = scpCommand(sshKeyFile, params.SSH_PORT.trim(), knownHosts)
+
+    sh """
+        : > ${shellQuote(knownHosts)}
+        chmod 600 ${shellQuote(knownHosts)}
+    """
+
+    def prepareCommand = """
+        if [ -d ${shellQuote(remoteDir)} ]; then
+            cd ${shellQuote(remoteDir)} && sudo ./smartagentctl stop --service 2>/dev/null || true
+        fi
+        sudo rm -rf ${shellQuote(remoteDir)}
+        sudo mkdir -p ${shellQuote(remoteDir)}
+        sudo chown ${shellQuote("${sshUsername}:${sshUsername}")} ${shellQuote(remoteDir)}
+    """.stripIndent().trim()
+
+    sh "${ssh} ${shellQuote(prepareCommand)}"
+
+    sh """
+        ${scp} -r ${shellQuote("${env.EXTRACT_DIR}/.")} ${shellQuote("${sshUsername}@${host}:${remoteDir}/")}
+    """
+
+    def configPath = "${env.STAGING_DIR}/config-${safeFileToken(host)}.ini"
+    sh """
+        set +x
+        tmp=${shellQuote(configPath)}
+        trap 'rm -f "\$tmp"' EXIT
+        awk -v key="\$ACCOUNT_ACCESS_KEY" '{
+            line = \$0
+            while ((pos = index(line, "PLACEHOLDER_ACCESS_KEY")) > 0) {
+                line = substr(line, 1, pos - 1) key substr(line, pos + 22)
+            }
+            print line
+        }' ${shellQuote("${env.EXTRACT_DIR}/config.ini")} > "\$tmp"
+        chmod 600 "\$tmp"
+        ${scp} "\$tmp" ${shellQuote("${sshUsername}@${host}:${remoteDir}/config.ini")}
+    """
+
+    sh "${ssh} ${shellQuote("chmod 600 ${shellQuote("${remoteDir}/config.ini")}")}"
+
+    def startCommand = """
+        cd ${shellQuote(remoteDir)} &&
+        sudo ./smartagentctl start --enable-auto-attach --service \
+            --user ${shellQuote(params.APPD_USER.trim())} \
+            --group ${shellQuote(params.APPD_GROUP.trim())}
+    """.stripIndent().trim()
+
+    sh "${ssh} ${shellQuote(startCommand)}"
+}
+
+def verifySmartAgentOnHost(String host, String sshUsername, String sshKeyFile) {
+    def remoteDir = params.REMOTE_INSTALL_DIR.trim()
+    def ssh = sshCommand(sshKeyFile, params.SSH_PORT.trim(), knownHostsFile(host), sshUsername, host)
+    sh "${ssh} ${shellQuote("cd ${shellQuote(remoteDir)} && sudo ./smartagentctl status")}"
+}
+
+def validateDeployParams() {
+    validateCommonParams()
+    validateSafeLocalPath(params.SMARTAGENT_ZIP_PATH, 'SMARTAGENT_ZIP_PATH')
+    validateLinuxName(params.APPD_USER, 'APPD_USER')
+    validateLinuxName(params.APPD_GROUP, 'APPD_GROUP')
+    validateSingleLine(params.AGENT_NAME, 'AGENT_NAME')
+    validateControllerHost(params.CONTROLLER_URL, 'CONTROLLER_URL')
+    validateToken(params.ACCOUNT_NAME, 'ACCOUNT_NAME')
+}
+
+def runClientInventoryApiCheck() {
+    validateApiCheckParams()
+    withCredentials([string(credentialsId: params.API_TOKEN_CREDENTIAL_ID.trim(), variable: 'SF_API_TOKEN')]) {
+        sh """
+            set +x
+            API_BASE_URL=${shellQuote(params.API_BASE_URL.trim())} \
+            OPENAPI_SPEC=${shellQuote("${env.WORKSPACE}/openapi.json")} \
+            bash ${shellQuote("${env.WORKSPACE}/scripts/check-client-inventory-api.sh")}
+        """
+    }
+}
+
+def validateApiCheckParams() {
+    validateApiBaseUrl(params.API_BASE_URL, 'API_BASE_URL')
+    validateCredentialId(params.API_TOKEN_CREDENTIAL_ID, 'API_TOKEN_CREDENTIAL_ID')
+    if (!fileExists("${env.WORKSPACE}/openapi.json")) {
+        error('openapi.json not found in Jenkins workspace')
+    }
+    if (!fileExists("${env.WORKSPACE}/scripts/check-client-inventory-api.sh")) {
+        error('scripts/check-client-inventory-api.sh not found in Jenkins workspace')
+    }
+}
+
+def validateCommonParams() {
+    validateBatchSize(params.BATCH_SIZE)
+    validatePort(params.SSH_PORT)
+    validateSafeRemoteInstallDir(params.REMOTE_INSTALL_DIR)
+}
+
+def parseHosts(String hostsText) {
+    def hosts = hostsText.replaceAll(',', '\n').split('\n').collect { it.trim() }.findAll { it && !it.startsWith('#') }.unique()
+    if (hosts.isEmpty()) {
+        error('No hosts provided in deployment-hosts credential')
+    }
+    hosts.each { validateHost(it) }
+    return hosts
+}
+
+def targetHosts() {
+    return env.TARGET_HOSTS.split('\n').collect { it.trim() }.findAll { it }
+}
+
+def runBatches(List hosts, int size, String actionName, Closure action) {
+    def batches = hosts.collate(size)
+    batches.eachWithIndex { batch, index ->
+        echo "${actionName} batch ${index + 1}/${batches.size()} (${batch.size()} hosts)"
+        def branches = [:]
+        batch.each { batchHost ->
+            def host = batchHost
+            branches["${actionName} ${host}"] = {
+                action(host)
+            }
+        }
+        parallel branches
+    }
+}
+
+def withHostResult(String host, Closure body) {
+    try {
+        body.call()
+        markHostResult(host, 'SUCCESS', '')
+    } catch (err) {
+        def message = err.getMessage() ?: err.toString()
+        markHostResult(host, 'FAILURE', message)
+        echo "Host ${host} failed: ${message}"
+    }
+}
+
+def markHostResult(String host, String status, String message) {
+    def path = resultFile(host)
+    if (status == 'SUCCESS' && fileExists(path) && readFile(path).startsWith('FAILURE')) {
+        return
+    }
+    writeFile file: path, text: "${status}\n${message}\n"
+}
+
+def summarizeHostResults(List hosts, String operation) {
+    def failed = []
+    hosts.each { host ->
+        def path = resultFile(host)
+        if (!fileExists(path)) {
+            failed << "${host} (no result recorded)"
+        } else {
+            def result = readFile(path)
+            if (!result.startsWith('SUCCESS')) {
+                failed << host
+            }
+        }
+    }
+
+    if (failed) {
+        error("${operation} failed on ${failed.size()} host(s): ${failed.join(', ')}")
+    }
+
+    echo "${operation} succeeded on ${hosts.size()} host(s)"
+}
+
+def resultFile(String host) {
+    return "${env.RESULTS_DIR}/${safeFileToken(host)}.result"
+}
+
+def sshCommand(String keyFile, String port, String knownHosts, String sshUsername, String host) {
+    return "ssh -i ${shellQuote(keyFile)} -p ${shellQuote(port)} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${shellQuote(knownHosts)} -o BatchMode=yes -o ConnectTimeout=10 ${shellQuote("${sshUsername}@${host}")}"
+}
+
+def scpCommand(String keyFile, String port, String knownHosts) {
+    return "scp -i ${shellQuote(keyFile)} -P ${shellQuote(port)} -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=${shellQuote(knownHosts)} -o BatchMode=yes -o ConnectTimeout=10"
+}
+
+def knownHostsFile(String host) {
+    return "${env.STAGING_DIR}/known_hosts_${safeFileToken(host)}"
+}
+
+def shellQuote(Object value) {
+    def text = value.toString()
+    return "'" + text.replace("'", "'\"'\"'") + "'"
+}
+
+def safeFileToken(String value) {
+    return value.replaceAll(/[^A-Za-z0-9_.-]/, '_')
+}
+
+def batchSize() {
+    return params.BATCH_SIZE.trim().toInteger()
+}
+
+def validateBatchSize(String rawValue) {
+    if (!(rawValue?.trim() ==~ /^[0-9]+$/)) {
+        error('BATCH_SIZE must be a number')
+    }
+    def value = rawValue.trim().toInteger()
+    if (value < 1 || value > 256) {
+        error('BATCH_SIZE must be between 1 and 256')
+    }
+}
+
+def validatePort(String rawValue) {
+    if (!(rawValue?.trim() ==~ /^[0-9]+$/)) {
+        error('SSH_PORT must be a number')
+    }
+    def value = rawValue.trim().toInteger()
+    if (value < 1 || value > 65535) {
+        error('SSH_PORT must be between 1 and 65535')
+    }
+}
+
+def validateHost(String host) {
+    if (!(host ==~ /^[A-Za-z0-9][A-Za-z0-9._:-]*$/) || host.contains('..')) {
+        error("Invalid host entry: ${host}")
+    }
+}
+
+def validateSafeRemoteInstallDir(String rawValue) {
+    def value = rawValue?.trim()
+    if (!value || value == '/' || value == '/opt' || value == '/opt/appdynamics') {
+        error('REMOTE_INSTALL_DIR must be a specific directory under /opt/appdynamics/')
+    }
+    if (!(value ==~ /^\/opt\/appdynamics\/[A-Za-z0-9._\/-]+$/) || value.contains('..') || value.contains('//')) {
+        error('REMOTE_INSTALL_DIR must stay under /opt/appdynamics/ and cannot contain whitespace, shell metacharacters, or traversal')
+    }
+}
+
+def validateSafeLocalPath(String rawValue, String name) {
+    def value = rawValue?.trim()
+    if (!value || !(value ==~ /^[A-Za-z0-9._\/-]+$/) || value.contains('..') || value.contains('//')) {
+        error("${name} must be a simple local path without whitespace, shell metacharacters, or traversal")
+    }
+}
+
+def resolveLocalPath(String rawValue) {
+    def value = rawValue.trim()
+    return value.startsWith('/') ? value : "${env.WORKSPACE}/${value}"
+}
+
+def validateLinuxName(String rawValue, String name) {
+    def value = rawValue?.trim()
+    if (!(value ==~ /^[A-Za-z_][A-Za-z0-9_.-]*$/)) {
+        error("${name} must be a valid Linux user/group name")
+    }
+}
+
+def validateToken(String rawValue, String name) {
+    def value = rawValue?.trim()
+    if (!(value ==~ /^[A-Za-z0-9_.-]+$/)) {
+        error("${name} may only contain letters, numbers, underscores, dots, and hyphens")
+    }
+}
+
+def validateCredentialId(String rawValue, String name) {
+    def value = rawValue?.trim()
+    if (!(value ==~ /^[A-Za-z0-9_.:-]+$/)) {
+        error("${name} must be a Jenkins credential ID without whitespace")
+    }
+}
+
+def validateApiBaseUrl(String rawValue, String name) {
+    def value = rawValue?.trim()
+    if (!value || value.contains(' ') || value.contains('\n') || value.contains('\r') || !(value.startsWith('https://') || value.startsWith('http://'))) {
+        error("${name} must be an http:// or https:// URL without whitespace")
+    }
+}
+
+def validateControllerHost(String rawValue, String name) {
+    def value = rawValue?.trim()
+    if (!(value ==~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/) || value.contains('..')) {
+        error("${name} must be a controller host name, not a URL with scheme or path")
+    }
+}
+
+def validateSingleLine(String rawValue, String name) {
+    def value = rawValue?.trim()
+    if (!value || value.contains('\n') || value.contains('\r')) {
+        error("${name} must be a non-empty single-line value")
+    }
+}
+
+def generateConfigIni(accessKey, agentName, logLevel, remoteDir, controllerUrl, accountName) {
+    return """ControllerURL    = ${controllerUrl}
 ControllerPort   = 443
 FMServicePort    = 443
 AccountAccessKey = ${accessKey}
-AccountName      = fso-tme
+AccountName      = ${accountName}
 EnableSSL        = true
 
 [CommonConfig]
 AgentName            = ${agentName}
 PollingIntervalInSec = 300
-Tags                 = 
-ServiceName          = 
+Tags                 =
+ServiceName          =
 
 [Telemetry]
 LogLevel  = ${logLevel}
@@ -189,31 +454,30 @@ Profiling = false
 
 [TLSClientSetting]
 Insecure        = false
-AgentHTTPProxy  = 
-AgentHTTPSProxy = 
-AgentNoProxy    = 
+AgentHTTPProxy  =
+AgentHTTPSProxy =
+AgentNoProxy    =
 
 [TLSSetting]
-CAFile     = 
-CertFile   = 
-KeyFile    = 
+CAFile     =
+CertFile   =
+KeyFile    =
 MinVersion = 1.2
 MaxVersion = 1.3
 
 [AutoDiscovery]
 RunAutoDiscovery          = false
 ExcludeLabels             = process.cpu.usage,process.memory.usage
-ExcludeProcesses          = 
-ExcludeUsers              = 
+ExcludeProcesses          =
+ExcludeUsers              =
 AutoDiscoveryTimeInterval = 4h
 AutoInstall               = false
 
 [TaskConfig]
 NativeEnable        = true
-UserPortalUserName  = 
-UserPortalPassword  = 
+UserPortalUserName  =
+UserPortalPassword  =
 UserPortalAuth      = none
 AutoUpdateLdPreload = true
 """
 }
-

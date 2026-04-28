@@ -1,215 +1,134 @@
 # Quick Start Guide
 
-Get up and running with Jenkins AppDynamics Smart Agent management in minutes.
+Get Jenkins managing AppDynamics Smart Agent from the four pipelines in this repo.
 
 ## TL;DR
 
-1. **Setup Jenkins credentials** with IDs: `ssh-private-key`, `deployment-hosts`, `account-access-key`
-2. **Place Smart Agent ZIP** in repository root (copied into Jenkins container during build)
-3. **Create pipelines** from `pipelines/Jenkinsfile.deploy and pipelines/Jenkinsfile.cleanup`
-4. **Run** → Build with Parameters
+1. Add Jenkins credentials: `ssh-private-key`, `deployment-hosts`, `account-access-key`
+2. Add `sf-api-token` for Client Inventory API checks
+3. For Database Agent installs, also add `db-monitor-password`
+4. Place `appdsmartagent_64_linux_25.10.0.497.zip` where the Jenkins agent can read it; the default is the repo workspace
+5. Create Jenkins Pipeline jobs from the four files in `pipelines/`
+6. Run `Deploy-Smart-Agent`, then install optional agents or run cleanup as needed
 
-## Minimum Setup (5 minutes)
+## Minimum Setup
 
 ### 1. Add Credentials
 
-**Jenkins → Manage Jenkins → Credentials → Global**
+**Jenkins -> Manage Jenkins -> Credentials -> Global**
 
 | Type | ID | Content |
-|------|-----|---------|
-| SSH Username with private key | `ssh-private-key` | Your PEM file |
-| Secret text | `deployment-hosts` | IPs (one per line) |
-| Secret text | `account-access-key` | AppD access key |
+|------|----|---------|
+| SSH Username with private key | `ssh-private-key` | SSH user and private key for target hosts |
+| Secret text | `deployment-hosts` | Target hosts, one per line |
+| Secret text | `account-access-key` | AppDynamics access key |
+| Secret text | `sf-api-token` | Token for `X-SF-Token` Client Inventory API checks |
+| Secret text | `db-monitor-password` | Database monitoring password, only needed for DB Agent |
 
+The SSH username comes from the `ssh-private-key` credential. There is no separate `SSH_USER` parameter.
 
-### 2. Place Smart Agent ZIP in Repository
-
-Download the Smart Agent ZIP to the repository root:
+### 2. Place Smart Agent ZIP
 
 ```bash
 cd /home/ubuntu/jenkins-sm-lab
 curl -o appdsmartagent_64_linux_25.10.0.497.zip "https://download.appdynamics.com/download/prox/download-file/smart-agent/latest/appdsmartagent_64_linux.zip"
 ```
 
-**What happens**: The Dockerfile copies this ZIP into the Jenkins container at `/var/jenkins_home/smartagent/appdsmartagent.zip` during the Docker build.
+The deploy pipeline defaults to `SMARTAGENT_ZIP_PATH=appdsmartagent_64_linux_25.10.0.497.zip`, resolved relative to the Jenkins agent workspace. The Dockerfile also copies the ZIP into the Jenkins controller container at `/var/jenkins_home/smartagent/appdsmartagent.zip`; use that path only if the job runs on the controller or an agent with the same mounted path.
 
-### 3. Create First Pipeline
+### 3. Build Jenkins Image
 
-1. **New Item** → Name: `Deploy-Smart-Agent` → **Pipeline**
-2. **Pipeline** section:
-   - Definition: `Pipeline script from SCM`
-   - Repository URL: Your repo
-   - Script Path: `pipelines/Jenkinsfile.deploy`
-3. **Save**
-
-### 4. Run It
-
-1. Click **Build with Parameters**
-2. Accept defaults (or adjust batch size)
-3. **Build**
-
-## Common Tasks
-
-### Deploy Smart Agent to All Hosts
+```bash
+docker build -t sm-jenkins .
 ```
+
+The image installs plugins from `plugins.txt`. Jenkins first-run setup is left enabled; use the initial admin password shown by Jenkins when the container starts.
+
+### 4. Create Pipeline Jobs
+
+Create one Pipeline job per file:
+
+| Job name | Script path |
+|----------|-------------|
+| `Deploy-Smart-Agent` | `pipelines/Jenkinsfile.deploy` |
+| `Install-Machine-Agent` | `pipelines/Jenkinsfile.install-machine-agent` |
+| `Install-DB-Agent` | `pipelines/Jenkinsfile.install-db-agent` |
+| `Cleanup-All-Agents` | `pipelines/Jenkinsfile.cleanup` |
+
+Use **Pipeline script from SCM**, point Jenkins at this repository, and set the script path from the table.
+
+## Common Runs
+
+### Deploy Smart Agent
+
+```text
 Pipeline: Deploy-Smart-Agent
-Parameters: Default (batch_size=256)
+Parameters: defaults, or set BATCH_SIZE=1 for the first smoke test
+```
+
+### Install Machine Agent
+
+```text
+Pipeline: Install-Machine-Agent
+Parameters: set TIER_NAME/NODE_NAME only if needed
+```
+
+### Install Database Agent
+
+```text
+Pipeline: Install-DB-Agent
+Parameters: DB_HOST, DB_PORT, DB_TYPE, DB_USERNAME, DB_PASSWORD_CREDENTIAL_ID
+Default password credential: db-monitor-password
 ```
 
 ### Complete Cleanup
-```
+
+```text
 Pipeline: Cleanup-All-Agents
 Parameters: CONFIRM_CLEANUP=true
-⚠️ Warning: This deletes /opt/appdynamics directory!
+Warning: this deletes REMOTE_INSTALL_DIR on every target host.
 ```
-## Pipeline Parameters
 
-All pipelines accept:
+## Shared Parameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `BATCH_SIZE` | `256` | Hosts per batch |
-| `SSH_USER` | `ubuntu` | SSH username |
-| `SMARTAGENT_USER` | _(empty)_ | Service user (deploy only) |
-| `SMARTAGENT_GROUP` | _(empty)_ | Service group (deploy only) |
+| `BATCH_SIZE` | `25` | Hosts processed in parallel per batch, 1-256 |
+| `REMOTE_INSTALL_DIR` | `/opt/appdynamics/appdsmartagent` | Remote Smart Agent directory |
+| `SSH_PORT` | `22` | SSH port |
+| `APPD_USER` | `ubuntu` | Service user for deploy/install pipelines |
+| `APPD_GROUP` | `ubuntu` | Service group for deploy/install pipelines |
+| `API_CHECK_ENABLED` | `true` | Run the Client Inventory API check after the host summary |
+| `API_BASE_URL` | `https://fso-tme.saas.appdynamics.com/fm-service/v1` | Client Inventory API base URL |
+| `API_TOKEN_CREDENTIAL_ID` | `sf-api-token` | Secret Text credential used as `X-SF-Token` |
 
-## Credential IDs (Must Match Exactly)
+`REMOTE_INSTALL_DIR` must stay under `/opt/appdynamics/`; cleanup and redeploy refuse broader paths.
 
-```
-ssh-private-key       # SSH key for targets
-deployment-hosts      # Newline-separated IPs
-account-access-key    # AppDynamics access key
-```
-
-## Troubleshooting One-Liners
-
-### Test SSH from Jenkins agent
-```bash
-ssh -i /path/to/key ubuntu@172.31.1.243 "echo SUCCESS"
-```
-
-### Check agent label
-```
-Manage Jenkins → Nodes → [Your Agent] → Check label is "linux"
-```
-
-### Verify credentials exist
-```
-Manage Jenkins → Credentials → Check IDs match exactly
-```
-
-### View pipeline workspace
-```bash
-# On Jenkins agent machine
-ls /path/to/jenkins/workspace/Deploy-Smart-Agent/
-```
-
-## Pipeline Execution Order (Typical Workflow)
-
-```
-1. Deploy-Smart-Agent          # Initial deployment
-2. 02-Install-Machine-Agent       # Install agents as needed
-3. 03-Install-Java-Agent
-4. Deploy-Smart-Agent
-5. 05-Install-DB-Agent
-   
-   ... (use as needed) ...
-
-6. Cleanup-All-Agents       # Maintenance/troubleshooting
-7. 07-09-10 Uninstall-*-Agent     # Remove specific agents
-8. Cleanup-All-Agents          # Complete removal
-```
-
-## File Locations (On Target Hosts)
-
-```
-/opt/appdynamics/appdsmartagent/           # Smart Agent directory
-/opt/appdynamics/appdsmartagent/config.ini # Configuration
-/tmp/appdsmartagent_64_linux_*.zip         # Uploaded package
-```
+The API check uses `openapi.json` and calls `GET /clients?limit=1&offset=0&include_health=false`. Cleanup checks API reachability/authentication only; it does not assert inventory deletion timing.
 
 ## Quick Checks
 
-### Is Smart Agent running?
 ```bash
 ssh ubuntu@<host> "cd /opt/appdynamics/appdsmartagent && sudo ./smartagentctl status"
-```
-
-### List installed agents?
-```bash
 ssh ubuntu@<host> "cd /opt/appdynamics/appdsmartagent && sudo ./smartagentctl list"
-```
-
-### Check logs?
-```bash
 ssh ubuntu@<host> "sudo tail -f /opt/appdynamics/appdsmartagent/logs/*"
 ```
 
-## Jenkins CLI Usage
+## Jenkins CLI Example
 
-Install Jenkins CLI:
-```bash
-wget http://your-jenkins:8080/jnlpJars/jenkins-cli.jar
-```
-
-Trigger build:
 ```bash
 java -jar jenkins-cli.jar -s http://your-jenkins:8080/ \
   -auth admin:token \
   build "Deploy-Smart-Agent" \
-  -p BATCH_SIZE=128 \
-  -p SSH_USER=ubuntu
+  -p BATCH_SIZE=25
 ```
 
-## Security Checklist
-
-- [ ] SSH keys stored as Jenkins credentials (not in code)
-- [ ] Deployment hosts not hardcoded
-- [ ] Jenkins agent in same VPC as targets
-- [ ] Security groups allow SSH from agent only
-- [ ] Target hosts have sudoers configured
-- [ ] Credentials scope set to Global
-
-## Getting More Help
-
-- **Detailed Setup**: [SETUP_GUIDE.md](SETUP_GUIDE.md)
-- **Full README**: [README.md](README.md)
-- **Pipeline Details**: Each `.jenkinsfile` has comments
-- **Jenkins Console**: Build → Console Output
-
-## Common Errors & Fixes
+## Common Errors
 
 | Error | Fix |
 |-------|-----|
-| "No agent available" | Check agent is online and labeled `linux` |
+| "No agent available" | Check the Jenkins agent is online and labeled `linux` |
 | "Credential not found" | Verify credential IDs match exactly |
-| "SSH connection failed" | Check security groups and network connectivity |
-| "Permission denied" | Verify sudo access on target hosts |
+| "SSH connection failed" | Check security groups and private network routing |
+| "Permission denied" | Verify SSH user and passwordless sudo on target hosts |
 | "No hosts provided" | Check `deployment-hosts` credential format |
-
-## Example: Full Deployment Workflow
-
-```bash
-# 1. Deploy Smart Agent
-Build: Deploy-Smart-Agent (default params)
-Wait: ✅ Success
-
-# 2. Install Node.js agent on all hosts
-Build: Deploy-Smart-Agent (default params)
-Wait: ✅ Success
-
-# 3. Verify on one host
-ssh ubuntu@172.31.1.243
-cd /opt/appdynamics/appdsmartagent
-sudo ./smartagentctl status
-# Should show: Smart Agent is running
-# Should show: node agent installed
-
-# 4. Later, to remove:
-Build: 09-Uninstall-Node-Agent
-Build: Cleanup-All-Agents
-```
-
----
-
-**Ready?** Start with pipeline `Deploy-Smart-Agent`!
