@@ -20,7 +20,7 @@ graph TB
         JM[Jenkins Master<br/>Web UI + Orchestration]
         JA[Jenkins Agent<br/>EC2 in VPC<br/>Label: linux]
     end
-    
+
     subgraph "AWS VPC - Private Network"
         subgraph "Target EC2 Instances"
             H1[Host 1<br/>172.31.1.243]
@@ -29,22 +29,22 @@ graph TB
             HN[Host N<br/>172.31.x.x]
         end
     end
-    
+
     DEV[Developer/Operator]
     APPD[AppDynamics<br/>Controller]
-    
+
     DEV -->|1. Triggers Pipeline| JM
     JM -->|2. Assigns Job| JA
     JA -->|3. SSH Deploy<br/>Private IPs| H1
     JA -->|3. SSH Deploy<br/>Private IPs| H2
     JA -->|3. SSH Deploy<br/>Private IPs| H3
     JA -->|3. SSH Deploy<br/>Private IPs| HN
-    
+
     H1 -.->|Metrics| APPD
     H2 -.->|Metrics| APPD
     H3 -.->|Metrics| APPD
     HN -.->|Metrics| APPD
-    
+
     style JM fill:#d4e6f1
     style JA fill:#a9cce3
     style H1 fill:#aed6f1
@@ -100,22 +100,22 @@ sequenceDiagram
     participant JA as Jenkins Agent<br/>(VPC)
     participant TH as Target Hosts<br/>(VPC)
     participant AppD as AppDynamics<br/>Controller
-    
+
     Dev->>JM: 1. Trigger Pipeline
     JM->>JM: 2. Load Credentials
     JM->>JA: 3. Schedule Job
     JA->>JA: 4. Prepare Batches
-    
+
     loop For Each Batch
         JA->>TH: 5. SSH Copy Files (SCP)
         JA->>TH: 6. SSH Execute Commands
         TH->>TH: 7. Install/Config Agent
         TH-->>JA: 8. Return Status
     end
-    
+
     JA->>JM: 9. Report Results
     JM->>Dev: 10. Show Build Status
-    
+
     TH->>AppD: 11. Send Metrics (Post-Install)
     AppD-->>Dev: 12. View Monitoring Data
 ```
@@ -129,60 +129,63 @@ sequenceDiagram
 ```mermaid
 flowchart TD
     START([Pipeline Triggered])
-    PARAMS[Load Parameters<br/>BATCH_SIZE, SSH_USER, etc.]
-    CREDS[Load Credentials<br/>ssh-private-key<br/>deployment-hosts<br/>account-access-key]
-    
+    PARAMS[Load Parameters<br/>BATCH_SIZE, REMOTE_INSTALL_DIR, SSH_PORT, etc.]
+    CREDS[Load Credentials<br/>ssh-private-key<br/>deployment-hosts<br/>account-access-key<br/>sf-api-token]
+
     PREPARE[Prepare Stage<br/>- Parse host list<br/>- Calculate batches<br/>- Validate inputs]
-    
+
     BATCH_LOOP{More<br/>Batches?}
-    
+
     BATCH_STAGE[Process Batch N<br/>- Extract batch hosts<br/>- Setup SSH keys]
-    
+
     PARALLEL[Parallel Execution<br/>Within Batch]
-    
+
     HOST1[Deploy to Host 1]
     HOST2[Deploy to Host 2]
     HOST3[Deploy to Host N]
-    
+
     WAIT[Wait for All<br/>Hosts in Batch]
-    
+
     CHECK{Any<br/>Failures?}
-    
+
     NEXT[Next Batch]
     RECORD[Record Failed Hosts]
-    
+
     SUMMARY[Summary Stage<br/>- Report totals<br/>- List failures<br/>- Set build status]
-    
+
+    API_CHECK[Client Inventory API Check<br/>- Validate openapi.json<br/>- GET /clients]
+
     CLEANUP[Post-Build Cleanup<br/>- Remove temp files<br/>- Remove SSH keys]
-    
+
     END([Pipeline Complete])
-    
+
     START --> PARAMS
     PARAMS --> CREDS
     CREDS --> PREPARE
     PREPARE --> BATCH_LOOP
-    
+
     BATCH_LOOP -->|Yes| BATCH_STAGE
     BATCH_LOOP -->|No| SUMMARY
-    
+
     BATCH_STAGE --> PARALLEL
     PARALLEL --> HOST1
     PARALLEL --> HOST2
     PARALLEL --> HOST3
-    
+
     HOST1 --> WAIT
     HOST2 --> WAIT
     HOST3 --> WAIT
-    
+
     WAIT --> CHECK
     CHECK -->|Yes| RECORD
     CHECK -->|No| NEXT
     RECORD --> NEXT
     NEXT --> BATCH_LOOP
-    
-    SUMMARY --> CLEANUP
+
+    SUMMARY --> API_CHECK
+    API_CHECK --> CLEANUP
     CLEANUP --> END
-    
+
     style START fill:#d5f4e6
     style END fill:#fadbd8
     style PREPARE fill:#d4e6f1
@@ -197,11 +200,11 @@ flowchart TD
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    DEPLOYMENT PIPELINE                       │
-│  01-deploy-smart-agent.jenkinsfile                          │
-│  • Uploads Smart Agent package (19MB)                       │
-│  • Uploads config.ini with access key                       │
-│  • Installs and starts Smart Agent service                  │
-│  • Enables auto-attach for agents                           │
+│  Jenkinsfile.deploy                                         │
+│  • Extracts Smart Agent package                             │
+│  • Copies Smart Agent files and config.ini                  │
+│  • Inserts access key without logging it                    │
+│  • Starts and verifies Smart Agent service                  │
 └────────────────────────┬────────────────────────────────────┘
                          │
           ┌──────────────┴──────────────┐
@@ -209,30 +212,14 @@ flowchart TD
           ▼                             ▼
 ┌─────────────────────┐       ┌─────────────────────┐
 │  INSTALL PIPELINES  │       │   MANAGEMENT        │
-│  (Lightweight)      │       │   PIPELINES         │
+│  (Lightweight)      │       │   PIPELINE          │
 ├─────────────────────┤       ├─────────────────────┤
-│ 02-install-machine  │       │ 06-stop-clean       │
-│ 03-install-java     │       │ 11-cleanup-all      │
-│ 04-install-node     │       └─────────────────────┘
-│ 05-install-db       │                 │
-│                     │                 │
-│ • SSH command only  │                 │
-│ • Uses smartagentctl│                 │
-│ • No file transfer  │                 │
-└──────────┬──────────┘                 │
-           │                            │
-           ▼                            ▼
-┌─────────────────────┐       ┌─────────────────────┐
-│ UNINSTALL PIPELINES │       │   FINAL CLEANUP     │
-│  (Lightweight)      │       └─────────────────────┘
-├─────────────────────┤
-│ 07-uninstall-machine│
-│ 08-uninstall-java   │
-│ 09-uninstall-node   │
-│ 10-uninstall-db     │
-│                     │
-│ • SSH command only  │
-│ • Uses smartagentctl│
+│ install-machine     │       │ cleanup             │
+│ install-db          │       │                     │
+│                     │       │ • Stop if present   │
+│ • SSH command only  │       │ • Remove install dir│
+│ • Uses smartagentctl│       │ • Verify deletion   │
+│ • No file transfer  │       └─────────────────────┘
 └─────────────────────┘
 ```
 
@@ -245,77 +232,77 @@ flowchart TD
 ```mermaid
 sequenceDiagram
     autonumber
-    
+
     participant U as User
     participant J as Jenkins Master
     participant A as Jenkins Agent
     participant C as Credentials Store
     participant H as Target Host
     participant S as Smart Agent
-    
+    participant AppD as Client Inventory API
+
     U->>J: Trigger "Deploy Smart Agent"
     J->>C: Fetch ssh-private-key
     J->>C: Fetch deployment-hosts
     J->>C: Fetch account-access-key
+    J->>C: Fetch sf-api-token
     J->>A: Assign job to agent
-    
+
     A->>A: Parse hosts list
-    A->>A: Calculate batches (BATCH_SIZE=256)
-    
+    A->>A: Calculate batches (default BATCH_SIZE=25)
+
     rect rgb(200, 220, 250)
         Note over A,H: Batch 1 Processing
-        
+
         loop Each Host in Batch (Parallel)
-            A->>H: SCP appdsmartagent.zip
+            A->>H: SSH: stop existing service if present
+            A->>H: SSH: recreate validated install directory
+            A->>H: SCP extracted Smart Agent files
             A->>H: SCP config.ini
-            A->>H: SSH: apt-get install unzip
-            A->>H: SSH: mkdir /opt/appdynamics
-            A->>H: SSH: unzip to /opt/appdynamics
-            A->>H: SSH: cp config.ini
             A->>H: SSH: smartagentctl start --service
             H->>S: Start Smart Agent Service
             S->>S: Enable auto-attach
             S-->>A: Success/Failure
         end
     end
-    
+
     A->>A: Check for failures
     A->>J: Report batch results
-    
+
     rect rgb(200, 250, 220)
         Note over A,H: Batch N Processing (if needed)
         A->>H: Repeat for remaining batches...
     end
-    
+
     A->>J: Final summary (successes/failures)
+    A->>AppD: GET /fm-service/v1/clients
     J->>U: Display build result
-    
+
     S->>S: Begin monitoring
 ```
 
 ### Batch Processing Details
 
 ```
-HOST LIST (1000 hosts)              BATCH_SIZE = 256
+HOST LIST (100 hosts)               BATCH_SIZE = 25
 ─────────────────────
 Host 001: 172.31.1.1                ┌──────────────────┐
 Host 002: 172.31.1.2      ────────▶ │   BATCH 1        │
-    ...                              │   Hosts 1-256    │ ───┐
-Host 256: 172.31.1.256               │   Sequential     │    │
+    ...                              │   Hosts 1-25     │ ───┐
+Host 025: 172.31.1.25                │   Sequential     │    │
                                      └──────────────────┘    │
-Host 257: 172.31.1.257               ┌──────────────────┐    │
-Host 258: 172.31.1.258   ────────▶  │   BATCH 2        │    │ SEQUENTIAL
-    ...                              │   Hosts 257-512  │    │ EXECUTION
-Host 512: 172.31.1.512               │   Sequential     │    │
+Host 026: 172.31.1.26                ┌──────────────────┐    │
+Host 027: 172.31.1.27    ────────▶  │   BATCH 2        │    │ SEQUENTIAL
+    ...                              │   Hosts 26-50    │    │ EXECUTION
+Host 050: 172.31.1.50                │   Sequential     │    │
                                      └──────────────────┘    │
-Host 513: 172.31.1.513               ┌──────────────────┐    │
+Host 051: 172.31.1.51                ┌──────────────────┐    │
     ...                              │   BATCH 3        │    │
-Host 768: 172.31.1.768   ────────▶  │   Hosts 513-768  │ ───┘
+Host 075: 172.31.1.75    ────────▶  │   Hosts 51-75    │ ───┘
                                      └──────────────────┘
-Host 769: 172.31.1.769               ┌──────────────────┐
+Host 076: 172.31.1.76                ┌──────────────────┐
     ...                              │   BATCH 4        │
-Host 1000: 172.31.2.232  ────────▶  │   Hosts 769-1000 │
-                                     │   (232 hosts)    │
+Host 100: 172.31.1.100   ────────▶  │   Hosts 76-100   │
                                      └──────────────────┘
 
 WITHIN EACH BATCH:
@@ -324,9 +311,9 @@ WITHIN EACH BATCH:
 │                                        │
 │  Host 1 ──┐                           │
 │  Host 2 ──┤                           │
-│  Host 3 ──┼─▶ Background processes (&)│
+│  Host 3 ──┼─▶ Jenkins parallel        │
 │    ...    │                           │
-│  Host 256─┘   └─▶ wait command        │
+│  Host 25─┘    └─▶ branch completion   │
 └────────────────────────────────────────┘
 ```
 
@@ -450,22 +437,22 @@ flowchart LR
         CS[Credentials Store<br/>Encrypted at Rest]
         JM[Jenkins Master]
     end
-    
+
     subgraph "Jenkins Agent"
         WS[Workspace<br/>Temp Files]
         KEY[SSH Key File<br/>600 permissions]
     end
-    
+
     subgraph "Target Hosts"
         TH[EC2 Instances<br/>Authorized Keys]
     end
-    
+
     CS -->|Binding| JM
     JM -->|Secure Copy| KEY
     KEY -->|SSH Auth| TH
     WS -.->|Cleanup| X[Deleted]
     KEY -.->|Cleanup| X
-    
+
     style CS fill:#fdeaa8
     style KEY fill:#fadbd8
     style X fill:#e8e8e8
@@ -532,13 +519,12 @@ flowchart LR
 │              Performance Metrics                        │
 ├────────────────────────────────────────────────────────┤
 │                                                         │
-│  Deployment Speed (default BATCH_SIZE=256):            │
+│  Deployment Speed (default BATCH_SIZE=25):             │
 │                                                         │
 │    10 hosts    →  1 batch  →  ~2 minutes               │
-│   100 hosts    →  1 batch  →  ~3 minutes               │
-│   500 hosts    →  2 batches → ~6 minutes               │
-│  1,000 hosts   →  4 batches → ~12 minutes              │
-│  5,000 hosts   →  20 batches → ~60 minutes             │
+│   100 hosts    →  4 batches → environment-dependent    │
+│   500 hosts    → 20 batches → environment-dependent    │
+│  1,000 hosts   → 40 batches → environment-dependent    │
 │                                                         │
 │  Factors:                                               │
 │  • Network bandwidth (19MB package per host)           │
@@ -606,28 +592,13 @@ RECOVERY: Check partial deployments, re-run pipeline
 ### Rollback Procedures
 
 ```
-ROLLBACK OPTION 1: Stop and Clean
-──────────────────────────────────
-Run: 06-stop-clean-smartagent.jenkinsfile
-• Stops all Smart Agent services
-• Cleans agent data directories
-• Preserves installation for restart
-
-
-ROLLBACK OPTION 2: Complete Removal
+ROLLBACK OPTION: Complete Removal
 ────────────────────────────────────
-Run: 11-cleanup-all-agents.jenkinsfile
-• Deletes /opt/appdynamics directory
+Run: Jenkinsfile.cleanup
+• Stops Smart Agent where present
+• Deletes the validated REMOTE_INSTALL_DIR
 • Removes all agents completely
 • Requires full redeployment
-
-
-ROLLBACK OPTION 3: Selective Uninstall
-───────────────────────────────────────
-Run: 07-10-uninstall-*.jenkinsfile
-• Removes specific agent types
-• Keeps Smart Agent running
-• Allows reinstall of different versions
 ```
 
 ---
@@ -675,14 +646,14 @@ graph LR
     TH[Target<br/>Hosts]
     APPD[AppDynamics<br/>Controller]
     SLACK[Slack<br/>Notifications]
-    
+
     GH -->|SCM Polling| JM
     JM -->|Job Execute| JA
     JA -->|SSH Deploy| TH
     TH -->|Send Metrics| APPD
     JM -->|Build Status| SLACK
     APPD -->|Alerts| SLACK
-    
+
     style GH fill:#f0f0f0
     style SLACK fill:#e8daef
 ```
@@ -700,5 +671,5 @@ graph LR
 
 ---
 
-**Last Updated**: November 2024  
+**Last Updated**: November 2024
 **Version**: 1.0.0

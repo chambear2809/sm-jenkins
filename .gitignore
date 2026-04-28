@@ -1,5 +1,6 @@
 # Jenkins workspace files
 *.txt
+!plugins.txt
 batch_*.txt
 all_hosts.txt
 batch_info.txt

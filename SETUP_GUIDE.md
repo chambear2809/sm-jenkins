@@ -17,16 +17,11 @@ Complete step-by-step guide to configure Jenkins for AppDynamics Smart Agent man
 - **Jenkins Agent**: Linux-based agent in AWS VPC (same network as target EC2 instances)
 - **Target Hosts**: Ubuntu EC2 instances with SSH access
 - **Network**: All hosts in same VPC with appropriate security groups
+- **Agent Tools**: `bash`, `curl`, `ssh`, `scp`, and `unzip` available on the Jenkins agent
 
 ### Required Jenkins Plugins
 
-Install these plugins via **Manage Jenkins → Plugins**:
-
-1. **Pipeline** (core plugin, usually pre-installed)
-2. **SSH Agent Plugin**
-   - Install: `Manage Jenkins → Plugins → Available → Search "SSH Agent"`
-3. **Credentials Plugin** (usually pre-installed)
-4. **Git Plugin** (if using SCM)
+Install the plugins listed in `plugins.txt`, or let the Dockerfile install them during image build. The list includes Pipeline, Git, Credentials Binding, SSH credentials, SSH Agent, and Pipeline Stage View support.
 
 ## Jenkins Configuration
 
@@ -108,7 +103,7 @@ MIIEpAIBAAKCAQEA...
 
 **Important**: One IP per line, no commas, no spaces, no extra characters.
 
-#### 3. AppDynamics Account Access Key (Optional)
+#### 3. AppDynamics Account Access Key
 
 **Type**: Secret text
 
@@ -117,6 +112,26 @@ MIIEpAIBAAKCAQEA...
 - **Secret**: Your AppDynamics access key
 
 **Example**: `abcd1234-ef56-7890-gh12-ijklmnopqrst`
+
+#### 4. Database Monitoring Password (Database Agent only)
+
+**Type**: Secret text
+
+- **ID**: `db-monitor-password`
+- **Description**: `Database monitoring password`
+- **Secret**: The password for the database monitoring user
+
+The Database Agent pipeline defaults to `DB_PASSWORD_CREDENTIAL_ID=db-monitor-password`. You can provide a different Secret Text credential ID at build time.
+
+#### 5. Client Inventory API Token
+
+**Type**: Secret text
+
+- **ID**: `sf-api-token`
+- **Description**: `Client Inventory API token`
+- **Secret**: Token sent in the `X-SF-Token` header
+
+All pipelines default to `API_TOKEN_CREDENTIAL_ID=sf-api-token` when `API_CHECK_ENABLED=true`.
 
 ### Credential Security Best Practices
 
@@ -127,7 +142,7 @@ MIIEpAIBAAKCAQEA...
 
 ## Smart Agent Package Setup
 
-Before building the Jenkins container, you need the AppDynamics Smart Agent ZIP in the repository root.
+The deploy pipeline reads the AppDynamics Smart Agent ZIP on the Jenkins agent. By default, `SMARTAGENT_ZIP_PATH=appdsmartagent_64_linux_25.10.0.497.zip`, resolved relative to the pipeline workspace.
 
 ### Download Smart Agent
 
@@ -157,17 +172,29 @@ The Dockerfile copies the ZIP file into the Jenkins container during the Docker 
 COPY appdsmartagent_64_linux_25.10.0.497.zip /var/jenkins_home/smartagent/appdsmartagent.zip
 ```
 
-The deploy pipeline reads it from `/var/jenkins_home/smartagent/appdsmartagent.zip` (inside the Jenkins container) and deploys it to target hosts.
+The Dockerfile copy is useful when the job runs on the Jenkins controller, or when agents mount the same path. For a separate Jenkins agent, keep the ZIP in the SCM workspace or set `SMARTAGENT_ZIP_PATH` to an absolute path available on that agent.
 
+Jenkins first-run setup is intentionally left enabled. The Docker image does not bake in an admin username or password.
 
-## Pipeline Creation
+## Client Inventory API Check
 
+The repository includes `openapi.json` for the Client Inventory API and `scripts/check-client-inventory-api.sh` for the Jenkins smoke check.
+
+All four pipelines expose:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `API_CHECK_ENABLED` | `true` | Runs the API check after the pipeline host summary |
+| `API_BASE_URL` | `https://fso-tme.saas.appdynamics.com/fm-service/v1` | Client Inventory API base URL |
+| `API_TOKEN_CREDENTIAL_ID` | `sf-api-token` | Secret Text credential used as `X-SF-Token` |
+
+The check calls `GET /clients?limit=1&offset=0&include_health=false`, requires a 2xx status, and verifies the response looks like JSON. The cleanup pipeline uses the same reachability/authentication check; it does not assert that cleaned-up hosts disappear from inventory.
 
 ## Pipeline Creation
 
 ### Method 1: Pipeline from SCM (Recommended)
 
-For each of the 2 pipelines:
+Create one Jenkins Pipeline job for each pipeline file:
 
 1. **Create New Item**
    - Go to Jenkins Dashboard
@@ -189,7 +216,11 @@ For each of the 2 pipelines:
 
 3. **Save**
 
-4. **Repeat** for both pipelines (Jenkinsfile.deploy and Jenkinsfile.cleanup) with appropriate names and script paths
+4. **Repeat** for:
+   - `pipelines/Jenkinsfile.deploy`
+   - `pipelines/Jenkinsfile.install-machine-agent`
+   - `pipelines/Jenkinsfile.install-db-agent`
+   - `pipelines/Jenkinsfile.cleanup`
 
 ### Method 2: Direct Pipeline Script
 
@@ -206,15 +237,8 @@ Recommended naming for clarity:
 ```
 01-Deploy-Smart-Agent
 02-Install-Machine-Agent
-03-Install-Java-Agent
-04-Install-Node-Agent
-05-Install-DB-Agent
-06-Stop-Clean-SmartAgent
-07-Uninstall-Machine-Agent
-08-Uninstall-Java-Agent
-09-Uninstall-Node-Agent
-10-Uninstall-DB-Agent
-11-Cleanup-All-Agents
+03-Install-DB-Agent
+04-Cleanup-All-Agents
 ```
 
 ## Testing
@@ -237,7 +261,7 @@ pipeline {
                     sh '''
                         echo "Testing SSH credentials..."
                         echo "$HOSTS" | head -1 | while read HOST; do
-                            ssh -i $SSH_KEY -o StrictHostKeyChecking=no -o ConnectTimeout=10 ubuntu@$HOST "echo 'Connection successful'"
+                            ssh -i $SSH_KEY -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 ubuntu@$HOST "echo 'Connection successful'"
                         done
                     '''
                 }
@@ -257,7 +281,6 @@ Modify `deployment-hosts` credential to contain only one test host initially.
 2. Click **Build with Parameters**
 3. Parameters:
    - `BATCH_SIZE`: `1` (for testing)
-   - `SSH_USER`: `ubuntu`
    - Leave others default
 4. Click **Build**
 5. Monitor console output
@@ -307,6 +330,8 @@ ssh -i /path/to/key ubuntu@172.31.1.243 -o ConnectTimeout=10
   - `ssh-private-key`
   - `deployment-hosts`
   - `account-access-key`
+  - `db-monitor-password` (for Database Agent)
+  - `sf-api-token` (for API checks)
 - Check credential scope is `Global`
 
 #### 4. Permission Denied on Target Hosts
@@ -349,8 +374,7 @@ ssh -vvv -i ${env.KEY_FILE} ...
 During pipeline run, SSH to Jenkins agent:
 ```bash
 cd /path/to/jenkins/workspace/01-Deploy-Smart-Agent
-cat all_hosts.txt
-cat batch_info.txt
+find smartagent-deploy -maxdepth 2 -type f
 ```
 
 ### Getting Help
@@ -371,7 +395,7 @@ If using different agent label:
 
 To limit concurrent SSH connections per batch, modify pipeline:
 ```groovy
-// Add semaphore or throttle
+BATCH_SIZE=10
 ```
 
 ### Multi-Region Deployment
@@ -391,16 +415,14 @@ AppDynamics/
   │   └── 01-Deploy-Smart-Agent
   ├── Installation/
   │   ├── 02-Install-Machine-Agent
-  │   ├── 03-Install-Java-Agent
-  │   └── ...
+  │   └── 03-Install-DB-Agent
   └── Cleanup/
-      └── 11-Cleanup-All-Agents
+      └── 04-Cleanup-All-Agents
 ```
 
 ## Next Steps
 
 - Review [Architecture Documentation](ARCHITECTURE.md)
-- See [Pipeline Reference](PIPELINE_REFERENCE.md)
 - Customize pipelines for your environment
 - Set up monitoring/alerting on pipeline failures
 
