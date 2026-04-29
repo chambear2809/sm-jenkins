@@ -2,40 +2,46 @@ pipeline {
     agent { label 'linux' }
 
     parameters {
+        string(name: 'AGENT_TYPE', defaultValue: 'machine', description: 'AppDynamics agent type shown by smartagentctl install --help, such as machine, db, java, or node')
         string(name: 'BATCH_SIZE', defaultValue: '25', description: 'Number of hosts to process in parallel per batch (1-256)')
         string(name: 'REMOTE_INSTALL_DIR', defaultValue: '/opt/appdynamics/appdsmartagent', description: 'Remote directory where Smart Agent is installed')
         string(name: 'SSH_PORT', defaultValue: '22', description: 'SSH port for remote hosts')
-        string(name: 'APPD_USER', defaultValue: 'ubuntu', description: 'User to run Database Agent process')
-        string(name: 'APPD_GROUP', defaultValue: 'ubuntu', description: 'Group to run Database Agent process')
+        string(name: 'APPD_USER', defaultValue: 'ubuntu', description: 'User to run agent process')
+        string(name: 'APPD_GROUP', defaultValue: 'ubuntu', description: 'Group to run agent process')
+        string(name: 'AGENT_VERSION', defaultValue: '', description: 'Agent version to install (optional)')
         choice(name: 'DOWNLOAD_PROTOCOL', choices: ['download_portal', 'local', 'http'], description: 'Download protocol for agent')
         string(name: 'DOWNLOAD_URI', defaultValue: '', description: 'Download URI (required if using local or http protocol)')
-
-        string(name: 'DB_HOST', defaultValue: '', description: 'Database host address (required)')
-        string(name: 'DB_PORT', defaultValue: '', description: 'Database port (required)')
-        choice(name: 'DB_TYPE', choices: ['mysql', 'postgresql', 'oracle', 'sqlserver', 'mongodb'], description: 'Database type')
-        string(name: 'DB_USERNAME', defaultValue: '', description: 'Database username for monitoring (required)')
-        string(name: 'DB_PASSWORD_CREDENTIAL_ID', defaultValue: 'db-monitor-password', description: 'Secret Text credential ID containing the database password')
-        string(name: 'DB_NAME', defaultValue: '', description: 'Database name/SID to monitor')
+        booleanParam(name: 'USE_SA_INFO', defaultValue: false, description: 'Pass --use_sa_info to share Smart Agent controller settings')
+        string(name: 'CONTROLLER_HOST_NAME', defaultValue: '', description: 'Controller host name for agent install (optional)')
+        string(name: 'CONTROLLER_PORT', defaultValue: '', description: 'Controller port for agent install (optional)')
+        booleanParam(name: 'ENABLE_SSL', defaultValue: false, description: 'Pass --enable_ssl to smartagentctl')
+        string(name: 'CONTROLLER_ACCOUNT_NAME', defaultValue: '', description: 'Controller account name for agent install (optional)')
+        string(name: 'CONTROLLER_ACCESS_KEY_CREDENTIAL_ID', defaultValue: 'account-access-key', description: 'Secret Text credential ID for controller access key (optional; used only when controller/account fields are set)')
+        string(name: 'APPLICATION_NAME', defaultValue: '', description: 'Application name for machine/java/node agents (optional)')
+        string(name: 'TIER_NAME', defaultValue: '', description: 'Tier name for machine/java/node agents (optional)')
+        string(name: 'NODE_NAME', defaultValue: '', description: 'Node name for machine/java/node agents (optional)')
+        string(name: 'AGENT_NAME', defaultValue: '', description: 'Agent name for db agent (optional)')
+        text(name: 'ADDITIONAL_SMARTAGENTCTL_ARGS', defaultValue: '', description: 'Optional extra smartagentctl arguments, one argument per line. Use --flag=value or put --flag and its value on separate lines.')
         booleanParam(name: 'API_CHECK_ENABLED', defaultValue: true, description: 'Check Client Inventory API after pipeline host summary')
         string(name: 'API_BASE_URL', defaultValue: 'https://fso-tme.saas.appdynamics.com/fm-service/v1', description: 'Client Inventory API base URL')
         string(name: 'API_TOKEN_CREDENTIAL_ID', defaultValue: 'sf-api-token', description: 'Secret Text credential ID for the X-SF-Token API token')
     }
 
     environment {
-        STAGING_DIR = "${WORKSPACE}/db-agent-install"
-        RESULTS_DIR = "${WORKSPACE}/db-agent-install/results"
+        STAGING_DIR = "${WORKSPACE}/appd-agent-install"
+        RESULTS_DIR = "${WORKSPACE}/appd-agent-install/results"
     }
 
     stages {
         stage('Preparation') {
             steps {
                 script {
-                    validateDbParams()
+                    validateInstallParams()
 
                     withCredentials([string(credentialsId: 'deployment-hosts', variable: 'HOSTS_LIST')]) {
                         def hostsList = parseHosts(HOSTS_LIST)
                         env.TARGET_HOSTS = hostsList.join('\n')
-                        echo "Preparing Database Agent installation on ${hostsList.size()} hosts in batches of ${batchSize()}: ${hostsList.join(', ')}"
+                        echo "Preparing ${agentType()} agent installation on ${hostsList.size()} hosts in batches of ${batchSize()}: ${hostsList.join(', ')}"
                     }
 
                     sh """
@@ -62,16 +68,19 @@ pipeline {
             }
         }
 
-        stage('Install Database Agent') {
+        stage('Install AppDynamics Agent') {
             steps {
                 script {
-                    withCredentials([
-                        sshUserPrivateKey(credentialsId: 'ssh-private-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USERNAME'),
-                        string(credentialsId: params.DB_PASSWORD_CREDENTIAL_ID.trim(), variable: 'DB_PASSWORD')
-                    ]) {
-                        runBatches(targetHosts(), batchSize(), 'Install Database Agent') { host ->
+                    def needsControllerKey = controllerAccessKeyRequired()
+                    def credentialBindings = [sshUserPrivateKey(credentialsId: 'ssh-private-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USERNAME')]
+                    if (needsControllerKey) {
+                        credentialBindings << string(credentialsId: params.CONTROLLER_ACCESS_KEY_CREDENTIAL_ID.trim(), variable: 'CONTROLLER_ACCESS_KEY')
+                    }
+
+                    withCredentials(credentialBindings) {
+                        runBatches(targetHosts(), batchSize(), 'Install AppDynamics Agent') { host ->
                             withHostResult(host) {
-                                installDatabaseAgentOnHost(host, env.SSH_USERNAME, env.SSH_KEY_FILE)
+                                installAgentOnHost(host, env.SSH_USERNAME, env.SSH_KEY_FILE, needsControllerKey)
                             }
                         }
                     }
@@ -79,15 +88,15 @@ pipeline {
             }
         }
 
-        stage('Verify Database Agent Installation') {
+        stage('Verify Agent Installation') {
             steps {
                 script {
                     withCredentials([
                         sshUserPrivateKey(credentialsId: 'ssh-private-key', keyFileVariable: 'SSH_KEY_FILE', usernameVariable: 'SSH_USERNAME')
                     ]) {
-                        runBatches(targetHosts(), batchSize(), 'Verify Database Agent') { host ->
+                        runBatches(targetHosts(), batchSize(), 'Verify AppDynamics Agent') { host ->
                             withHostResult(host) {
-                                verifyDatabaseAgentStatus(host, env.SSH_USERNAME, env.SSH_KEY_FILE)
+                                verifyAgentOnHost(host, env.SSH_USERNAME, env.SSH_KEY_FILE)
                             }
                         }
                     }
@@ -98,7 +107,7 @@ pipeline {
         stage('Summary') {
             steps {
                 script {
-                    summarizeHostResults(targetHosts(), 'Database Agent installation')
+                    summarizeHostResults(targetHosts(), "${agentType()} agent installation")
                 }
             }
         }
@@ -117,10 +126,10 @@ pipeline {
 
     post {
         success {
-            echo "Database Agent successfully installed on all hosts"
+            echo "${agentType()} agent successfully installed on all hosts"
         }
         failure {
-            echo "Database Agent installation failed. Check host result summary for details."
+            echo "${agentType()} agent installation failed. Check host result summary for details."
         }
         always {
             sh "rm -rf ${shellQuote(env.STAGING_DIR)}"
@@ -131,17 +140,28 @@ pipeline {
 def verifySmartAgentPresent(String host, String sshUsername, String sshKeyFile) {
     def remoteDir = params.REMOTE_INSTALL_DIR.trim()
     def ssh = sshCommand(sshKeyFile, params.SSH_PORT.trim(), knownHostsFile(host), sshUsername, host)
+    def type = agentType()
     def command = """
         test -f ${shellQuote("${remoteDir}/smartagentctl")} &&
-        echo "Smart Agent found"
+        cd ${shellQuote(remoteDir)} &&
+        if ! sudo ./smartagentctl install --help | sed -n '/Available Commands:/,/Flags:/p' | grep -Eq '^[[:space:]]+${type}[[:space:]]'; then
+            echo ${shellQuote("smartagentctl install does not support agent type: ${type}")}
+            sudo ./smartagentctl install --help | sed -n '/Available Commands:/,/Flags:/p'
+            exit 1
+        fi
+        echo ${shellQuote("Smart Agent supports install ${type}")}
     """.stripIndent().trim()
     sh "${ssh} ${shellQuote(command)}"
 }
 
-def installDatabaseAgentOnHost(String host, String sshUsername, String sshKeyFile) {
+def installAgentOnHost(String host, String sshUsername, String sshKeyFile, boolean includeControllerAccessKey) {
     def remoteDir = params.REMOTE_INSTALL_DIR.trim()
     def ssh = sshCommand(sshKeyFile, params.SSH_PORT.trim(), knownHostsFile(host), sshUsername, host)
-    def args = ['sudo', './smartagentctl', 'install', 'db']
+    def args = ['sudo', './smartagentctl', 'install', agentType()]
+
+    if (params.AGENT_VERSION?.trim()) {
+        args += ['--agent_version', params.AGENT_VERSION.trim()]
+    }
 
     if (params.DOWNLOAD_PROTOCOL == 'local') {
         args += ['--download_uri', params.DOWNLOAD_URI.trim(), '--download_protocol', 'local']
@@ -149,26 +169,68 @@ def installDatabaseAgentOnHost(String host, String sshUsername, String sshKeyFil
         args += ['--download_uri', params.DOWNLOAD_URI.trim(), '--download_protocol', 'http']
     }
 
-    args += [
-        '--db-host', params.DB_HOST.trim(),
-        '--db-port', params.DB_PORT.trim(),
-        '--db-type', params.DB_TYPE,
-        '--db-username', params.DB_USERNAME.trim()
-    ]
+    if (params.USE_SA_INFO) {
+        args += ['--use_sa_info']
+    }
+    if (params.CONTROLLER_HOST_NAME?.trim()) {
+        args += ['--controller_host_name', params.CONTROLLER_HOST_NAME.trim()]
+    }
+    if (params.CONTROLLER_PORT?.trim()) {
+        args += ['--controller_port', params.CONTROLLER_PORT.trim()]
+    }
+    if (params.ENABLE_SSL) {
+        args += ['--enable_ssl']
+    }
+    if (params.CONTROLLER_ACCOUNT_NAME?.trim()) {
+        args += ['--controller_account_name', params.CONTROLLER_ACCOUNT_NAME.trim()]
+    }
+    if (includeControllerAccessKey) {
+        args += ['--controller_account_access_key', env.CONTROLLER_ACCESS_KEY]
+    }
 
-    if (params.DB_NAME?.trim()) {
-        args += ['--db-name', params.DB_NAME.trim()]
+    if (supportsApplicationFields(agentType())) {
+        if (params.APPLICATION_NAME?.trim()) {
+            args += ['--application_name', params.APPLICATION_NAME.trim()]
+        }
+        if (params.TIER_NAME?.trim()) {
+            args += ['--tier_name', params.TIER_NAME.trim()]
+        }
+        if (params.NODE_NAME?.trim()) {
+            args += ['--node_name', params.NODE_NAME.trim()]
+        }
+    }
+
+    if (agentType() == 'db' && params.AGENT_NAME?.trim()) {
+        args += ['--agent_name', params.AGENT_NAME.trim()]
     }
 
     args += ['--user', params.APPD_USER.trim(), '--group', params.APPD_GROUP.trim()]
+    args += parseAdditionalSmartAgentArgs(params.ADDITIONAL_SMARTAGENTCTL_ARGS)
 
-    def installCommand = args.collect { shellQuote(it) }.join(' ') + ' --db-password "$DB_PASSWORD"'
-    def remoteCommand = "read -r DB_PASSWORD && cd ${shellQuote(remoteDir)} && ${installCommand}"
+    def installCommand = args.collect { shellQuote(it) }.join(' ')
+    runSmartAgentCommand(ssh, "cd ${shellQuote(remoteDir)} && ${installCommand}")
+}
 
+def verifyAgentOnHost(String host, String sshUsername, String sshKeyFile) {
+    def remoteDir = params.REMOTE_INSTALL_DIR.trim()
+    def ssh = sshCommand(sshKeyFile, params.SSH_PORT.trim(), knownHostsFile(host), sshUsername, host)
+    runSmartAgentCommand(ssh, "cd ${shellQuote(remoteDir)} && sudo ./smartagentctl status")
+
+    def service = serviceNameForAgentType(agentType())
+    if (service) {
+        def command = """
+            sudo systemctl --no-pager --full status ${shellQuote(service)} | sed -n '1,20p'
+            sudo systemctl is-active --quiet ${shellQuote(service)}
+        """.stripIndent().trim()
+        sh "${ssh} ${shellQuote(command)}"
+    }
+}
+
+def runSmartAgentCommand(String ssh, String remoteCommand) {
     sh """
         set +x
         set +e
-        output=\$(printf '%s\\n' "\$DB_PASSWORD" | ${ssh} ${shellQuote(remoteCommand)} 2>&1)
+        output=\$(${ssh} ${shellQuote(remoteCommand)} 2>&1)
         status=\$?
         set -e
         printf '%s\\n' "\$output"
@@ -182,25 +244,81 @@ def installDatabaseAgentOnHost(String host, String sshUsername, String sshKeyFil
     """
 }
 
-def verifyDatabaseAgentStatus(String host, String sshUsername, String sshKeyFile) {
-    def ssh = sshCommand(sshKeyFile, params.SSH_PORT.trim(), knownHostsFile(host), sshUsername, host)
-    def command = """
-        sudo systemctl --no-pager --full status appdynamics-db-agent.service | sed -n '1,20p'
-        sudo systemctl is-active --quiet appdynamics-db-agent.service
-    """.stripIndent().trim()
-    sh "${ssh} ${shellQuote(command)}"
+def controllerAccessKeyRequired() {
+    return params.CONTROLLER_ACCOUNT_NAME?.trim() || params.CONTROLLER_HOST_NAME?.trim() || params.CONTROLLER_PORT?.trim()
 }
 
-def validateDbParams() {
+def supportsApplicationFields(String agentType) {
+    return ['machine', 'java', 'node'].contains(agentType)
+}
+
+def serviceNameForAgentType(String agentType) {
+    def services = [
+        machine: 'appdynamics-machine-agent.service',
+        db: 'appdynamics-db-agent.service'
+    ]
+    return services[agentType]
+}
+
+def parseAdditionalSmartAgentArgs(String rawValue) {
+    if (!rawValue?.trim()) {
+        return []
+    }
+    return rawValue.split('\n').collect { it.trim() }.findAll { it }.collect { value ->
+        validateAdditionalSmartAgentArg(value)
+        return value
+    }
+}
+
+def validateInstallParams() {
     validateCommonParams()
+    validateAgentType(agentType())
     validateLinuxName(params.APPD_USER, 'APPD_USER')
     validateLinuxName(params.APPD_GROUP, 'APPD_GROUP')
+    validateOptionalSingleLine(params.AGENT_VERSION, 'AGENT_VERSION')
     validateDownloadSettings()
-    validateHost(params.DB_HOST.trim())
-    validatePort(params.DB_PORT)
-    validateSingleLine(params.DB_USERNAME, 'DB_USERNAME')
-    validateCredentialId(params.DB_PASSWORD_CREDENTIAL_ID, 'DB_PASSWORD_CREDENTIAL_ID')
-    validateOptionalSingleLine(params.DB_NAME, 'DB_NAME')
+    validateOptionalHost(params.CONTROLLER_HOST_NAME, 'CONTROLLER_HOST_NAME')
+    if (params.CONTROLLER_PORT?.trim()) {
+        validatePort(params.CONTROLLER_PORT)
+    }
+    validateOptionalSingleLine(params.CONTROLLER_ACCOUNT_NAME, 'CONTROLLER_ACCOUNT_NAME')
+    validateCredentialId(params.CONTROLLER_ACCESS_KEY_CREDENTIAL_ID, 'CONTROLLER_ACCESS_KEY_CREDENTIAL_ID')
+    validateOptionalSingleLine(params.APPLICATION_NAME, 'APPLICATION_NAME')
+    validateOptionalSingleLine(params.TIER_NAME, 'TIER_NAME')
+    validateOptionalSingleLine(params.NODE_NAME, 'NODE_NAME')
+    validateOptionalSingleLine(params.AGENT_NAME, 'AGENT_NAME')
+    parseAdditionalSmartAgentArgs(params.ADDITIONAL_SMARTAGENTCTL_ARGS)
+}
+
+def validateCommonParams() {
+    validateBatchSize(params.BATCH_SIZE)
+    validatePort(params.SSH_PORT)
+    validateSafeRemoteInstallDir(params.REMOTE_INSTALL_DIR)
+}
+
+def validateAgentType(String rawValue) {
+    if (!(rawValue ==~ /^[A-Za-z][A-Za-z0-9_-]*$/)) {
+        error("AGENT_TYPE must be a smartagentctl install subcommand token")
+    }
+}
+
+def agentType() {
+    return params.AGENT_TYPE.trim()
+}
+
+def validateDownloadSettings() {
+    if (params.DOWNLOAD_PROTOCOL != 'download_portal') {
+        validateSingleLine(params.DOWNLOAD_URI, 'DOWNLOAD_URI')
+    }
+    if (params.DOWNLOAD_PROTOCOL == 'http' && !(params.DOWNLOAD_URI.trim() ==~ /^https?:\/\/\S+$/)) {
+        error('DOWNLOAD_URI must be an http:// or https:// URL when DOWNLOAD_PROTOCOL is http')
+    }
+}
+
+def validateAdditionalSmartAgentArg(String value) {
+    if (value.length() > 4096 || value.contains('\r') || value.contains('\u0000')) {
+        error('ADDITIONAL_SMARTAGENTCTL_ARGS contains an invalid argument')
+    }
 }
 
 def runClientInventoryApiCheck() {
@@ -223,21 +341,6 @@ def validateApiCheckParams() {
     }
     if (!fileExists("${env.WORKSPACE}/scripts/check-client-inventory-api.sh")) {
         error('scripts/check-client-inventory-api.sh not found in Jenkins workspace')
-    }
-}
-
-def validateCommonParams() {
-    validateBatchSize(params.BATCH_SIZE)
-    validatePort(params.SSH_PORT)
-    validateSafeRemoteInstallDir(params.REMOTE_INSTALL_DIR)
-}
-
-def validateDownloadSettings() {
-    if (params.DOWNLOAD_PROTOCOL != 'download_portal') {
-        validateSingleLine(params.DOWNLOAD_URI, 'DOWNLOAD_URI')
-    }
-    if (params.DOWNLOAD_PROTOCOL == 'http' && !(params.DOWNLOAD_URI.trim() ==~ /^https?:\/\/\S+$/)) {
-        error('DOWNLOAD_URI must be an http:// or https:// URL when DOWNLOAD_PROTOCOL is http')
     }
 }
 
@@ -346,17 +449,24 @@ def validateBatchSize(String rawValue) {
 
 def validatePort(String rawValue) {
     if (!(rawValue?.trim() ==~ /^[0-9]+$/)) {
-        error('SSH_PORT must be a number')
+        error('Port values must be numeric')
     }
     def value = rawValue.trim().toInteger()
     if (value < 1 || value > 65535) {
-        error('SSH_PORT must be between 1 and 65535')
+        error('Port values must be between 1 and 65535')
     }
 }
 
 def validateHost(String host) {
     if (!(host ==~ /^[A-Za-z0-9][A-Za-z0-9._:-]*$/) || host.contains('..')) {
         error("Invalid host entry: ${host}")
+    }
+}
+
+def validateOptionalHost(String rawValue, String name) {
+    def value = rawValue?.trim()
+    if (value && (!(value ==~ /^[A-Za-z0-9][A-Za-z0-9._-]*$/) || value.contains('..'))) {
+        error("${name} must be a host name without scheme or path")
     }
 }
 
@@ -384,13 +494,6 @@ def validateCredentialId(String rawValue, String name) {
     }
 }
 
-def validateApiBaseUrl(String rawValue, String name) {
-    def value = rawValue?.trim()
-    if (!value || value.contains(' ') || value.contains('\n') || value.contains('\r') || !(value.startsWith('https://') || value.startsWith('http://'))) {
-        error("${name} must be an http:// or https:// URL without whitespace")
-    }
-}
-
 def validateSingleLine(String rawValue, String name) {
     def value = rawValue?.trim()
     if (!value || value.contains('\n') || value.contains('\r')) {
@@ -399,8 +502,15 @@ def validateSingleLine(String rawValue, String name) {
 }
 
 def validateOptionalSingleLine(String rawValue, String name) {
-    def value = rawValue ?: ''
-    if (value.contains('\n') || value.contains('\r')) {
+    def value = rawValue?.trim()
+    if (value && (value.contains('\n') || value.contains('\r'))) {
         error("${name} must be a single-line value")
+    }
+}
+
+def validateApiBaseUrl(String rawValue, String name) {
+    def value = rawValue?.trim()
+    if (!value || value.contains(' ') || value.contains('\n') || value.contains('\r') || !(value.startsWith('https://') || value.startsWith('http://'))) {
+        error("${name} must be an http:// or https:// URL without whitespace")
     }
 }

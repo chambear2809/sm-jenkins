@@ -126,7 +126,7 @@ For each Jenkinsfile in the `pipelines/` directory:
    - Script Path: matching Jenkinsfile path, such as `pipelines/Jenkinsfile.deploy`
 6. Save
 
-Repeat for all pipelines (Jenkinsfile.install-machine-agent, Jenkinsfile.install-db-agent, Jenkinsfile.cleanup).
+Repeat for all pipelines (`Jenkinsfile.install-appd-agent`, `Jenkinsfile.install-machine-agent`, `Jenkinsfile.install-db-agent`, `Jenkinsfile.cleanup`).
 
 ### 6️⃣ Deploy!
 
@@ -149,18 +149,19 @@ java -jar jenkins-cli.jar -s http://your-jenkins:8080/ build "Deploy-Smart-Agent
 |----------|-------------|------|
 | **01. Deploy Smart Agent** | Installs Smart Agent and starts service | `Jenkinsfile.deploy` |
 
-### Agent Installation (2 pipelines)
+### Agent Installation (3 pipelines)
 | Pipeline | Description | File |
 |----------|-------------|------|
-| **02. Install Machine Agent** | Installs Machine Agent via smartagentctl | `Jenkinsfile.install-machine-agent` |
-| **03. Install Database Agent** | Installs Database Agent via smartagentctl | `Jenkinsfile.install-db-agent` |
+| **02. Install AppDynamics Agent** | Installs any agent type listed by `smartagentctl install --help` on the target host | `Jenkinsfile.install-appd-agent` |
+| **03. Install Machine Agent** | Installs Machine Agent via smartagentctl | `Jenkinsfile.install-machine-agent` |
+| **04. Install Database Agent** | Installs Database Agent via smartagentctl | `Jenkinsfile.install-db-agent` |
 
 ### Smart Agent Management (1 pipeline)
 | Pipeline | Description | File |
 |----------|-------------|------|
-| **04. Cleanup All Agents** | Deletes the validated `REMOTE_INSTALL_DIR` | `Jenkinsfile.cleanup` |
+| **05. Cleanup All Agents** | Deletes the validated `REMOTE_INSTALL_DIR` | `Jenkinsfile.cleanup` |
 
-**Total: 4 pipelines** - All support configurable batch sizes (default: 25, max: 256)
+**Total: 5 pipelines** - All support configurable batch sizes (default: 25, max: 256)
 
 ## 🛠️ How It Works
 
@@ -186,7 +187,7 @@ java -jar jenkins-cli.jar -s http://your-jenkins:8080/ build "Deploy-Smart-Agent
 
 ## 🔎 Client Inventory API Check
 
-The repo tracks `openapi.json` for the Client Inventory API. All four pipelines run `scripts/check-client-inventory-api.sh` after their host summary when `API_CHECK_ENABLED=true`.
+The repo tracks `openapi.json` for the Client Inventory API. All five pipelines run `scripts/check-client-inventory-api.sh` after their host summary when `API_CHECK_ENABLED=true`.
 
 The check verifies:
 - `openapi.json` is present and defines `/clients`

@@ -19,6 +19,7 @@ jenkins-sm-lab/
 │   └── check-client-inventory-api.sh
 └── pipelines/
     ├── Jenkinsfile.deploy
+    ├── Jenkinsfile.install-appd-agent
     ├── Jenkinsfile.install-machine-agent
     ├── Jenkinsfile.install-db-agent
     └── Jenkinsfile.cleanup
@@ -33,9 +34,10 @@ For first-time setup, start with [QUICK_START.md](QUICK_START.md), then use [SET
 | # | Pipeline | File | Description |
 |---|----------|------|-------------|
 | 01 | Deploy Smart Agent | `Jenkinsfile.deploy` | Extracts, configures, copies, starts, and verifies Smart Agent |
-| 02 | Install Machine Agent | `Jenkinsfile.install-machine-agent` | Installs Machine Agent through `smartagentctl` |
-| 03 | Install Database Agent | `Jenkinsfile.install-db-agent` | Installs Database Agent through `smartagentctl` |
-| 04 | Cleanup All Agents | `Jenkinsfile.cleanup` | Stops Smart Agent and removes `REMOTE_INSTALL_DIR` |
+| 02 | Install AppDynamics Agent | `Jenkinsfile.install-appd-agent` | Installs any agent type listed by `smartagentctl install --help` on the target host |
+| 03 | Install Machine Agent | `Jenkinsfile.install-machine-agent` | Installs Machine Agent through `smartagentctl` |
+| 04 | Install Database Agent | `Jenkinsfile.install-db-agent` | Installs Database Agent through `smartagentctl` |
+| 05 | Cleanup All Agents | `Jenkinsfile.cleanup` | Stops Smart Agent and removes `REMOTE_INSTALL_DIR` |
 
 All pipelines use `BATCH_SIZE` with a default of `25` and a maximum of `256`.
 
@@ -45,7 +47,7 @@ All pipelines use `BATCH_SIZE` with a default of `25` and a maximum of `256`.
 |---------------|------|-----------|---------|
 | `ssh-private-key` | SSH Username with private key | Yes | All pipelines |
 | `deployment-hosts` | Secret text | Yes | All pipelines |
-| `account-access-key` | Secret text | Deploy only | `Jenkinsfile.deploy` |
+| `account-access-key` | Secret text | Deploy/generic install when controller fields are supplied | `Jenkinsfile.deploy`, `Jenkinsfile.install-appd-agent` |
 | `db-monitor-password` | Secret text | DB Agent only by default | `Jenkinsfile.install-db-agent` |
 | `sf-api-token` | Secret text | API checks by default | All pipelines |
 
@@ -67,7 +69,7 @@ Batch deployment:
 
 Agent install:
   1. Run Deploy-Smart-Agent first
-  2. Run Install-Machine-Agent or Install-DB-Agent
+  2. Run Install-AppDynamics-Agent for any `smartagentctl install --help` agent type, or use the dedicated Machine/DB jobs
   3. Use the Summary stage to identify failed hosts
 
 Cleanup:

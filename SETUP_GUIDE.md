@@ -180,7 +180,7 @@ Jenkins first-run setup is intentionally left enabled. The Docker image does not
 
 The repository includes `openapi.json` for the Client Inventory API and `scripts/check-client-inventory-api.sh` for the Jenkins smoke check.
 
-All four pipelines expose:
+All five pipelines expose:
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -218,6 +218,7 @@ Create one Jenkins Pipeline job for each pipeline file:
 
 4. **Repeat** for:
    - `pipelines/Jenkinsfile.deploy`
+   - `pipelines/Jenkinsfile.install-appd-agent`
    - `pipelines/Jenkinsfile.install-machine-agent`
    - `pipelines/Jenkinsfile.install-db-agent`
    - `pipelines/Jenkinsfile.cleanup`

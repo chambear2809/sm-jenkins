@@ -81,7 +81,7 @@ pipeline {
                     ]) {
                         runBatches(targetHosts(), batchSize(), 'Verify Machine Agent') { host ->
                             withHostResult(host) {
-                                verifySmartAgentStatus(host, env.SSH_USERNAME, env.SSH_KEY_FILE)
+                                verifyMachineAgentStatus(host, env.SSH_USERNAME, env.SSH_KEY_FILE)
                             }
                         }
                     }
@@ -144,22 +144,43 @@ def installMachineAgentOnHost(String host, String sshUsername, String sshKeyFile
     }
 
     if (params.TIER_NAME?.trim()) {
-        args += ['--tier-name', params.TIER_NAME.trim()]
+        args += ['--tier_name', params.TIER_NAME.trim()]
     }
     if (params.NODE_NAME?.trim()) {
-        args += ['--node-name', params.NODE_NAME.trim()]
+        args += ['--node_name', params.NODE_NAME.trim()]
     }
 
     args += ['--user', params.APPD_USER.trim(), '--group', params.APPD_GROUP.trim()]
 
     def installCommand = args.collect { shellQuote(it) }.join(' ')
-    sh "${ssh} ${shellQuote("cd ${shellQuote(remoteDir)} && ${installCommand}")}"
+    runSmartAgentInstall(ssh, "cd ${shellQuote(remoteDir)} && ${installCommand}")
 }
 
-def verifySmartAgentStatus(String host, String sshUsername, String sshKeyFile) {
-    def remoteDir = params.REMOTE_INSTALL_DIR.trim()
+def runSmartAgentInstall(String ssh, String remoteCommand) {
+    sh """
+        set +x
+        set +e
+        output=\$(${ssh} ${shellQuote(remoteCommand)} 2>&1)
+        status=\$?
+        set -e
+        printf '%s\\n' "\$output"
+        if [ "\$status" -ne 0 ]; then
+            exit "\$status"
+        fi
+        if printf '%s\\n' "\$output" | grep -Eq '"error"[[:space:]]*:[[:space:]]*true'; then
+            echo 'smartagentctl reported error=true'
+            exit 1
+        fi
+    """
+}
+
+def verifyMachineAgentStatus(String host, String sshUsername, String sshKeyFile) {
     def ssh = sshCommand(sshKeyFile, params.SSH_PORT.trim(), knownHostsFile(host), sshUsername, host)
-    sh "${ssh} ${shellQuote("cd ${shellQuote(remoteDir)} && sudo ./smartagentctl status")}"
+    def command = """
+        sudo systemctl --no-pager --full status appdynamics-machine-agent.service | sed -n '1,20p'
+        sudo systemctl is-active --quiet appdynamics-machine-agent.service
+    """.stripIndent().trim()
+    sh "${ssh} ${shellQuote(command)}"
 }
 
 def validateMachineParams() {

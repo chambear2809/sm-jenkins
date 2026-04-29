@@ -198,13 +198,31 @@ def deploySmartAgentToHost(String host, String sshUsername, String sshKeyFile) {
             --group ${shellQuote(params.APPD_GROUP.trim())}
     """.stripIndent().trim()
 
-    sh "${ssh} ${shellQuote(startCommand)}"
+    runSmartAgentCommand(ssh, startCommand)
 }
 
 def verifySmartAgentOnHost(String host, String sshUsername, String sshKeyFile) {
     def remoteDir = params.REMOTE_INSTALL_DIR.trim()
     def ssh = sshCommand(sshKeyFile, params.SSH_PORT.trim(), knownHostsFile(host), sshUsername, host)
-    sh "${ssh} ${shellQuote("cd ${shellQuote(remoteDir)} && sudo ./smartagentctl status")}"
+    runSmartAgentCommand(ssh, "cd ${shellQuote(remoteDir)} && sudo ./smartagentctl status")
+}
+
+def runSmartAgentCommand(String ssh, String remoteCommand) {
+    sh """
+        set +x
+        set +e
+        output=\$(${ssh} ${shellQuote(remoteCommand)} 2>&1)
+        status=\$?
+        set -e
+        printf '%s\\n' "\$output"
+        if [ "\$status" -ne 0 ]; then
+            exit "\$status"
+        fi
+        if printf '%s\\n' "\$output" | grep -Eq '"error"[[:space:]]*:[[:space:]]*true'; then
+            echo 'smartagentctl reported error=true'
+            exit 1
+        fi
+    """
 }
 
 def validateDeployParams() {

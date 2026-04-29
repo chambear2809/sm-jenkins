@@ -1,6 +1,6 @@
 # Quick Start Guide
 
-Get Jenkins managing AppDynamics Smart Agent from the four pipelines in this repo.
+Get Jenkins managing AppDynamics Smart Agent from the five pipelines in this repo.
 
 ## TL;DR
 
@@ -8,7 +8,7 @@ Get Jenkins managing AppDynamics Smart Agent from the four pipelines in this rep
 2. Add `sf-api-token` for Client Inventory API checks
 3. For Database Agent installs, also add `db-monitor-password`
 4. Place `appdsmartagent_64_linux_25.10.0.497.zip` where the Jenkins agent can read it; the default is the repo workspace
-5. Create Jenkins Pipeline jobs from the four files in `pipelines/`
+5. Create Jenkins Pipeline jobs from the five files in `pipelines/`
 6. Run `Deploy-Smart-Agent`, then install optional agents or run cleanup as needed
 
 ## Minimum Setup
@@ -51,6 +51,7 @@ Create one Pipeline job per file:
 | Job name | Script path |
 |----------|-------------|
 | `Deploy-Smart-Agent` | `pipelines/Jenkinsfile.deploy` |
+| `Install-AppDynamics-Agent` | `pipelines/Jenkinsfile.install-appd-agent` |
 | `Install-Machine-Agent` | `pipelines/Jenkinsfile.install-machine-agent` |
 | `Install-DB-Agent` | `pipelines/Jenkinsfile.install-db-agent` |
 | `Cleanup-All-Agents` | `pipelines/Jenkinsfile.cleanup` |
